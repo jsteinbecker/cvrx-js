@@ -102,28 +102,20 @@ struct Product: Identifiable, Hashable, Codable {
 /// this record documents the change and stores the cosigner.
 struct ScanOverride: Identifiable, Hashable, Codable {
     let id: UUID
-    
     /// Which lot this override applies to.
     let lotID: UUID
-    
     /// The field that was changed ("barcode", "lot", "expiration").
     let field: String
-    
     /// Original value from the scan.
     let previousValue: String
-    
     /// New value after override.
     let newValue: String
-    
     /// User who performed the override.
     let overriddenBy: User
-    
     /// When the override was applied.
     let overriddenAt: Date
-    
     /// If non-nil, the verifier who co-signed this override.
     var cosignedBy: User?
-    
     /// When the cosign occurred (nil if not yet cosigned).
     var cosignedAt: Date?
     

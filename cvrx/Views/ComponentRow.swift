@@ -14,9 +14,18 @@ private struct DraftLotEntry: Identifiable {
         Double(quantityText.replacingOccurrences(of: ",", with: "."))
     }
 
+    /// A lot is considered expired once the whole expiration day has elapsed,
+    /// i.e. the start of the *following* day is in the past.
+    ///
+    /// Uses calendar day arithmetic rather than adding a fixed 86,400 s so the
+    /// boundary stays correct across DST transitions (where a day is 23 or 25 h).
     var isExpired: Bool {
         guard hasExpiration else { return false }
-        return Calendar.current.startOfDay(for: expiration).addingTimeInterval(86_400) < .now
+        let startOfExpiry = Calendar.current.startOfDay(for: expiration)
+        guard let dayAfterExpiry = Calendar.current.date(
+            byAdding: .day, value: 1, to: startOfExpiry
+        ) else { return false }
+        return dayAfterExpiry < .now
     }
 
     /// A pristine row the user never touched — ignored on commit, never blocks "Done".
@@ -57,9 +66,16 @@ struct ComponentRow: View {
     @FocusState private var focus: Cell?
 
     static let quantityTolerance = 0.001
-    private static let columnCount = 5
 
-    private enum Cell: Hashable { case lot(UUID), qty(UUID), mfg(UUID) }
+    private enum Cell: Hashable {
+        case lot(UUID), qty(UUID), mfg(UUID)
+
+        var draftID: UUID {
+            switch self {
+            case let .lot(id), let .qty(id), let .mfg(id): id
+            }
+        }
+    }
     private enum Status { case empty, insufficient, sufficient, over }
 
     // MARK: Body
@@ -163,6 +179,18 @@ struct ComponentRow: View {
         .controlSize(.small)
         .font(.caption.weight(.semibold))
     }
+    
+    private func binding(for id: UUID) -> Binding<DraftLotEntry>? {
+        guard drafts.contains(where: { $0.id == id }) else { return nil }
+        return Binding(
+            get: { self.drafts.first(where: { $0.id == id }) ?? DraftLotEntry() },
+            set: { newValue in
+                if let i = self.drafts.firstIndex(where: { $0.id == id }) {
+                    self.drafts[i] = newValue
+                }
+            }
+        )
+    }
 
     // MARK: Lot table
 
@@ -176,8 +204,14 @@ struct ComponentRow: View {
                 Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
                     columnHeader
                     ForEach(component.utilizedLots) { committedRow($0) }
-                    ForEach($drafts) { draftRows($0) }
+                    ForEach(drafts) { draft in
+                        if let binding = binding(for: draft.id) {
+                            draftRow(binding)
+                        }
+                    }
                 }
+
+                draftWarnings
             }
 
             if isEditing {
@@ -242,12 +276,14 @@ struct ComponentRow: View {
         }
     }
 
-    // Editable draft — main row plus an optional full-width warning row.
-    @ViewBuilder
-    private func draftRows(_ draft: Binding<DraftLotEntry>) -> some View {
+    // Editable draft — exactly one GridRow so the grid's shape stays fixed.
+    // Warnings render below the grid (see `draftWarnings`): a full-width
+    // spanning GridRow crashes Grid layout when a committed row is inserted
+    // in the same update pass (e.g. on "Done").
+    private func draftRow(_ draft: Binding<DraftLotEntry>) -> some View {
         let entry = draft.wrappedValue
 
-        GridRow(alignment: .center) {
+        return GridRow(alignment: .center) {
             TextField("Lot #", text: draft.lotNumber)
                 .textFieldStyle(.roundedBorder)
                 .frame(minWidth: 90)
@@ -281,13 +317,21 @@ struct ComponentRow: View {
             }
             .buttonStyle(.borderless)
         }
+    }
 
-        if let warning = warning(for: entry) {
-            GridRow {
-                Text(warning.text)
-                    .font(.caption2)
-                    .foregroundStyle(warning.color)
-                    .gridCellColumns(Self.columnCount)
+    @ViewBuilder
+    private var draftWarnings: some View {
+        let active = drafts.compactMap { draft -> (id: UUID, text: String, color: Color)? in
+            guard let w = warning(for: draft) else { return nil }
+            return (draft.id, w.text, w.color)
+        }
+        if !active.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(active, id: \.id) { warning in
+                    Label(warning.text, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(warning.color)
+                }
             }
         }
     }
@@ -322,15 +366,32 @@ struct ComponentRow: View {
 
     private func addDraft() {
         var entry = DraftLotEntry()
-        let remaining = component.quantityRemaining
-        let defaultQty = remaining > Self.quantityTolerance ? remaining : component.totalQuantity
-        entry.quantityText = Self.format(defaultQty)
+        let remaining = remainingNeed()
+        if remaining > Self.quantityTolerance {
+            entry.quantityText = Self.format(remaining)
+        }
         drafts.append(entry)
         focus = .lot(entry.id)
     }
 
     private func removeDraft(_ id: UUID) {
+        // Drop focus first if it lives on the row being removed, otherwise the
+        // FocusState points at a cell that no longer exists.
+        if focus.map(\.draftID) == id { focus = nil }
         drafts.removeAll { $0.id == id }
+    }
+
+    /// Need still uncovered, accounting for both committed lots *and* the
+    /// quantities entered in other in-progress drafts (optionally excluding one).
+    ///
+    /// Used for prefill and the over-draw warning so that splitting a single
+    /// component across several new lots doesn't double-count the remaining need.
+    private func remainingNeed(excludingDraft excludedID: UUID? = nil) -> Double {
+        let pending = drafts
+            .filter { $0.id != excludedID && !$0.isEmpty }
+            .compactMap(\.parsedQuantity)
+            .reduce(0, +)
+        return component.quantityRemaining - pending
     }
 
     private var canFinish: Bool {
@@ -340,10 +401,11 @@ struct ComponentRow: View {
     private func finishEditing() {
         for draft in drafts where !draft.isEmpty && draft.isValid {
             guard let qty = draft.parsedQuantity else { continue }
+            let trimmedMfg = draft.mfg.trimmingCharacters(in: .whitespacesAndNewlines)
             onAddLot(CompoundUtilizedLot(
                 lot: draft.lotNumber.trimmingCharacters(in: .whitespacesAndNewlines),
                 expiration: draft.hasExpiration ? draft.expiration : nil,
-                mfg: draft.mfg,
+                mfg: trimmedMfg.isEmpty ? nil : trimmedMfg,
                 strengthQuantity: qty
             ))
         }
@@ -358,7 +420,7 @@ struct ComponentRow: View {
         }
         if let qty = draft.parsedQuantity,
            component.quantityRemaining > Self.quantityTolerance,
-           qty > component.quantityRemaining + Self.quantityTolerance {
+           qty > remainingNeed(excludingDraft: draft.id) + Self.quantityTolerance {
             return ("Exceeds remaining need", .orange)
         }
         return nil
@@ -389,7 +451,7 @@ struct ComponentRow: View {
         case .empty:        .secondary.opacity(0.05)
         case .insufficient: .orange.opacity(0.08)
         case .sufficient:   component.isScanned ? .green.opacity(0.08) : .yellow.opacity(0.05)
-        case .over:         .orange.opacity(0.10)
+        case .over:         .yellow.opacity(0.10)
         }
     }
 

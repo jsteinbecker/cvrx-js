@@ -167,7 +167,7 @@ struct HeroCard: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .trailing) {
+            VStack(alignment: .trailing, spacing: 6) {
                 Text(order.orderNumber)
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -193,7 +193,7 @@ struct HeroCard: View {
             Divider()
 
             // Patient — second most prominent thing.
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("PATIENT")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.secondary)
@@ -207,12 +207,6 @@ struct HeroCard: View {
                     text: order.route
                 )
             }
-
-            // Inline meta row.
-            HStack(spacing: 0) {
-                
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(18)
         .cardSurface()

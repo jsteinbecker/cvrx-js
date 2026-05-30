@@ -8,3 +8,4 @@ enum OrderStatus: String, CaseIterable, Hashable, Codable {
     case approved = "Approved"
     case rejected = "Rejected"
 }
+
