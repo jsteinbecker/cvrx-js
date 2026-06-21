@@ -1,29 +1,26 @@
-//
-//  VerificationTab.swift
-//  cvrx
-//
-//  Created by Josh Steinbecker on 5/27/26.
-//
-
 import SwiftUI
+import SwiftData
 
-/// Dedicated verification queue. Independent of the compounding/capture flow:
-/// the user enters verification only by tapping an item here.
 struct VerificationTab: View {
     let store: CompoundingStore
-    @EnvironmentObject var user: User
+    @Environment(\.currentUser) private var user
+    @Query(sort: \CompoundOrder.dueTime) private var orders: [CompoundOrder]
+
+    private var ordersReadyForVerification: [CompoundOrder] {
+        orders.filter { $0.status == .waitingForApproval }
+    }
 
     var body: some View {
         NavigationStack {
             Group {
-                if store.ordersReadyForVerification.isEmpty {
+                if ordersReadyForVerification.isEmpty {
                     ContentUnavailableView(
                         "Nothing to Verify",
                         systemImage: "tray",
                         description: Text("Compounds marked ready for verification will appear here.")
                     )
                 } else {
-                    List(store.ordersReadyForVerification) { order in
+                    List(ordersReadyForVerification) { order in
                         NavigationLink(value: order.id) {
                             VerifyQueueRow(order: order)
                         }
@@ -32,10 +29,21 @@ struct VerificationTab: View {
             }
             .navigationTitle("Verification Queue")
             .navigationDestination(for: CompoundOrder.ID.self) { orderID in
-                if let order = store.orderBinding(for: orderID) {
+                if let order = orders.first(where: { $0.id == orderID }) {
                     VerifyScene(order: order, store: store)
                 } else {
                     ContentUnavailableView("Order Not Found", systemImage: "exclamationmark.triangle")
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    HStack {
+                        Image(systemName: "person.crop.circle.badge.checkmark", variableValue: 1.00)
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(Color.green, Color.white, Color.gray)
+                            .font(.system(size: 16, weight: .regular))
+                        Text(user.name)
+                    }
                 }
             }
         }
@@ -82,4 +90,3 @@ struct VerifyQueueRow: View {
         .padding(.vertical, 4)
     }
 }
-

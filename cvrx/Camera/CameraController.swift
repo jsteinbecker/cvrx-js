@@ -14,6 +14,10 @@ final class CameraController: NSObject {
     // this dict). Never touch this dict from MainActor.
     private var photoDelegates: [Int64: PhotoCaptureDelegate] = [:]
 
+    // Internal flag for queue-guarding start(); only touched on sessionQueue.
+    @ObservationIgnored private var sessionReady = false
+
+    // SwiftUI-observed flag; must only be mutated on the main thread.
     var isConfigured = false
 
     func configure() async throws {
@@ -24,18 +28,20 @@ final class CameraController: NSObject {
             sessionQueue.async {
                 do {
                     try self.configureSession()
-                    Task { @MainActor in self.isConfigured = true }
+                    self.sessionReady = true
                     continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
                 }
             }
         }
+        // Hop to the main actor so the @Observable mutation is main-thread-safe.
+        await MainActor.run { isConfigured = true }
     }
 
     func start() {
         sessionQueue.async {
-            guard self.isConfigured, !self.session.isRunning else { return }
+            guard self.sessionReady, !self.session.isRunning else { return }
             self.session.startRunning()
         }
     }
@@ -52,6 +58,11 @@ final class CameraController: NSObject {
 
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
             sessionQueue.async {
+                guard self.session.isRunning else {
+                    continuation.resume(throwing: CameraError.notConfigured)
+                    return
+                }
+
                 // Force JPEG so PhotoCaptureDelegate.fileDataRepresentation()
                 // returns a writable .jpg blob. AVCapturePhotoOutput defaults
                 // to HEIF on capable devices, and the file we save with a
@@ -103,7 +114,7 @@ final class CameraController: NSObject {
     }
 
     private func configureSession() throws {
-        guard !isConfigured else { return }
+        guard !sessionReady else { return }
 
         session.beginConfiguration()
         defer { session.commitConfiguration() }

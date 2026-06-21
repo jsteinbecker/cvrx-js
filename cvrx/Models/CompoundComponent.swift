@@ -217,14 +217,11 @@ struct CompoundUtilizedLot: Identifiable, Hashable, Codable {
 struct CompoundComponent: Identifiable, Hashable, Codable {
     let id: UUID
     var product: Product
-
     /// The total target quantity for this component.
     var totalQuantity: Double
     var quantityUnit: QuantityUnit
-
     /// Lots scanned in to fulfill this component.
     var utilizedLots: [CompoundUtilizedLot]
-
     /// Indicates the component has at least one verified scan.
     var isScanned: Bool { !utilizedLots.isEmpty }
 

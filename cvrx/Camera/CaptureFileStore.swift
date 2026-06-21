@@ -1,7 +1,7 @@
 import Foundation
 
 enum CaptureFileStore {
-    static func savePhotoData(_ data: Data, orderID: CompoundOrder.ID, kind: CaptureKind, timestamp: Date) throws -> URL {
+    nonisolated static func savePhotoData(_ data: Data, orderID: CompoundOrder.ID, kind: CaptureKind, timestamp: Date) throws -> URL {
         let directory = try captureDirectory(orderID: orderID)
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -14,7 +14,7 @@ enum CaptureFileStore {
         return url
     }
 
-    static func captureDirectory(orderID: CompoundOrder.ID) throws -> URL {
+    nonisolated static func captureDirectory(orderID: CompoundOrder.ID) throws -> URL {
         let base = try FileManager.default.url(
             for: .documentDirectory,
             in: .userDomainMask,

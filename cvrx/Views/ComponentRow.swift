@@ -11,7 +11,7 @@ private struct DraftLotEntry: Identifiable {
     var quantityText = ""
 
     var parsedQuantity: Double? {
-        Double(quantityText.replacingOccurrences(of: ",", with: "."))
+        Double(quantityText.replacingOccurrences(of: ",", with: ""))
     }
 
     /// A lot is considered expired once the whole expiration day has elapsed,
@@ -64,6 +64,8 @@ struct ComponentRow: View {
     @State private var didInit = false
     @State private var lotPendingRemoval: CompoundUtilizedLot?
     @FocusState private var focus: Cell?
+    @State private var highlightedIndex: Int? = nil
+    @State private var dataIsIncomplete = false
 
     static let quantityTolerance = 0.001
 
@@ -77,6 +79,10 @@ struct ComponentRow: View {
         }
     }
     private enum Status { case empty, insufficient, sufficient, over }
+    
+    private var dataIncomplete: Bool {
+        dataIsIncomplete || drafts.isEmpty
+    }
 
     // MARK: Body
 
@@ -163,11 +169,9 @@ struct ComponentRow: View {
     private var editToggle: some View {
         Group {
             if isEditing {
-                Button(action: finishEditing) {
-                    Label("Done", systemImage: "checkmark.circle.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canFinish)
+                Button(action: finishEditing) { Label("Done", systemImage: "checkmark.circle.fill") }
+                    .buttonStyle(.bordered)
+                    .disabled(dataIncomplete || !canFinish)
             } else {
                 Button(action: startEditing) {
                     Label("Edit", systemImage: "square.and.pencil")
@@ -289,27 +293,17 @@ struct ComponentRow: View {
                 .frame(minWidth: 90)
                 .focused($focus, equals: .lot(entry.id))
                 .submitLabel(.next)
-                .onSubmit { focus = .qty(entry.id) }
-#if os(iOS)
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-#endif
+                .onSubmit { focus = .mfg(entry.id) }
+                #if os(iOS)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                #endif
 
-            TextField("0", text: draft.quantityText)
-                .textFieldStyle(.roundedBorder)
-                .frame(minWidth: 56, maxWidth: 72)
-                .focused($focus, equals: .qty(entry.id))
-#if os(iOS)
-                .keyboardType(.decimalPad)
-#endif
+            MeasurementInput(magnitudeText: draft.quantityText, unit: unit)
+                .frame(minWidth: 80)
 
             expiryCell(draft)
-
-            TextField("—", text: draft.mfg)
-                .textFieldStyle(.roundedBorder)
-                .frame(minWidth: 70)
-                .focused($focus, equals: .mfg(entry.id))
-
+            mfgAutocompleteField(draft)
             Button(role: .destructive) { removeDraft(entry.id) } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.body)
@@ -356,6 +350,84 @@ struct ComponentRow: View {
                 .buttonStyle(.borderless)
         }
     }
+
+    @ViewBuilder
+    private func mfgAutocompleteField(_ draft: Binding<DraftLotEntry>) -> some View {
+        let entry = draft.wrappedValue
+        let isFocused = focus == .mfg(entry.id)
+        let matches: [String] = {
+            guard isFocused, !entry.mfg.isEmpty else { return [] }
+            return LabelerStore.names
+                .filter { $0.localizedCaseInsensitiveContains(entry.mfg) }
+                .prefix(8)
+                .map { $0 }
+        }()
+
+        let select: (String) -> Void = { name in
+            draft.mfg.wrappedValue = name
+            highlightedIndex = nil
+            focus = nil
+        }
+
+        TextField("—", text: draft.mfg)
+            .textFieldStyle(.roundedBorder)
+            .frame(minWidth: 70)
+            .focused($focus, equals: .mfg(entry.id))
+            // reset highlight whenever the match set could have changed
+            .onChange(of: entry.mfg) { highlightedIndex = nil }
+            .onKeyPress(.downArrow) {
+                guard isFocused, !matches.isEmpty else { return .ignored }
+                highlightedIndex = min((highlightedIndex ?? -1) + 1, matches.count - 1)
+                return .handled
+            }
+            .onKeyPress(.upArrow) {
+                guard isFocused, !matches.isEmpty else { return .ignored }
+                highlightedIndex = max((highlightedIndex ?? matches.count) - 1, 0)
+                return .handled
+            }
+            .onKeyPress(.return) {
+                guard isFocused, let i = highlightedIndex, matches.indices.contains(i)
+                else { return .ignored }
+                select(matches[i])
+                return .handled
+            }
+            .onKeyPress(.escape) {
+                guard isFocused, !matches.isEmpty else { return .ignored }
+                highlightedIndex = nil
+                focus = nil
+                return .handled
+            }
+            .overlay(alignment: .top) {
+                if !matches.isEmpty {
+                    VStack(spacing: 0) {
+                        Color.clear.frame(height: 28)
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(matches.enumerated()), id: \.element) { index, name in
+                                Button { select(name) } label: {
+                                    Text(name)
+                                        .font(.caption)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 5)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .background(highlightedIndex == index
+                                            ? Color.accentColor.opacity(0.2)
+                                            : Color.clear)
+                                if index != matches.count - 1 { Divider() }
+                            }
+                        }
+                        .frame(minWidth: 150, alignment: .leading)
+                        .background(.background)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
+                    }
+                }
+            }
+            .zIndex(isFocused && !matches.isEmpty ? 10 : 0)
+    }
+
 
     // MARK: Editing actions
 
@@ -485,3 +557,21 @@ struct ComponentRow: View {
         formatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 }
+
+// MARK: - Labeler data source
+
+private enum LabelerStore {
+    static let names: [String] = {
+        guard
+            let url = Bundle.main.url(forResource: "Labelers", withExtension: "json"),
+            let data = try? Data(contentsOf: url),
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Any]]
+        else { return [] }
+        var seen = Set<String>()
+        return root.values
+            .compactMap { $0["name"] as? String }
+            .filter { seen.insert($0).inserted }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }()
+}
+

@@ -45,7 +45,7 @@ struct StatusPill: View {
         switch status {
         case .pending: .secondary
         case .compounding: .blue
-        case .readyForVerification: .orange
+        case .waitingForApproval: .orange
         case .remediation: .purple
         case .approved: .green
         case .rejected: .red

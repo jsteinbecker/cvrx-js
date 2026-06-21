@@ -1,18 +1,30 @@
 import SwiftUI
+import SwiftData
 
 @main
 struct RxCompoundingDocumentationApp: App {
-    // `User` is an ObservableObject (reference type with @Published fields),
-    // so the owner of the single source-of-truth instance must use
-    // @StateObject — not @State. @State would not subscribe to
-    // objectWillChange, so mutations to user.role / user.username would
-    // never re-render the UI.
-    @StateObject private var user = MockData.makeUserMsm()
+    @State private var user = MockData.makeUserMsm()
+
+    private let container: ModelContainer
+    private let store: CompoundingStore
+    
+    init() {
+        do {
+            container = try ModelContainer(for:
+                                           CompoundOrder.self,
+                                           Labeler.self
+            )
+            store = CompoundingStore(modelContext: container.mainContext)
+        } catch {
+            fatalError("Could not create ModelContainer: \(error)")
+        }
+    }
 
     var body: some Scene {
         WindowGroup {
-            MainScene()
-                .environmentObject(user)
+            MainScene(store: store)
+                .modelContainer(container)
+                .environment(\.currentUser, user)
         }
     }
 }

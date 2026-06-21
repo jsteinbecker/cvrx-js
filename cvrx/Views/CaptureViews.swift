@@ -62,7 +62,7 @@ extension CompoundOrder {
         switch status {
         case .remediation:
             if isFlagged { return .flaggedActive }
-        case .readyForVerification, .approved, .rejected:
+        case .waitingForApproval, .approved, .rejected:
             if isFlagged { return .flaggedResolved }
         default:
             return .none

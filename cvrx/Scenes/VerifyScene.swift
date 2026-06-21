@@ -3,8 +3,8 @@ import SwiftUI
 /// Verification scene. Built around a large image with carousel navigation,
 /// pinch-to-zoom, and quick approve/reject actions.
 struct VerifyScene: View {
-    @Binding var order: CompoundOrder
-    @EnvironmentObject var user: User;
+    var order: CompoundOrder
+    @Environment(\.currentUser) var user
     let store: CompoundingStore
 
     @State private var rejectionReason = ""

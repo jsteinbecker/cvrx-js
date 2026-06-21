@@ -1,21 +1,17 @@
 import Foundation
+import SwiftData
+import SwiftUI
+
 
 /// The result of a verification action (approval or rejection).
 struct VerificationRecord: Identifiable, Hashable, Codable {
     let id: UUID
-    
-    /// The verifier (RPh) who made the decision.
+
     let verifiedBy: User
-    
-    /// When the decision was made.
     let verifiedAt: Date
-    
-    /// The decision: "Approved" or "Rejected".
     let decision: String
-    
-    /// If rejected, the reason why (will trigger remediation).
     var rejectionReason: String?
-    
+
     init(
         id: UUID = UUID(),
         verifiedBy: User,
@@ -29,7 +25,7 @@ struct VerificationRecord: Identifiable, Hashable, Codable {
         self.decision = decision
         self.rejectionReason = rejectionReason
     }
-    
+
     var isApproved: Bool { decision == "Approved" }
 }
 
@@ -47,24 +43,26 @@ struct Patient: Identifiable, Hashable, Codable {
     var floor: String
     var room: String
     var bed: String?
-    
-    init(
-        id: UUID,
-        name: String,
-        floor: String,
-        room: String,
-        bed: String? = nil
-    ) {
+    var dob: Date?
+
+    init(id: UUID = UUID(), name: String, floor: String, room: String, bed: String? = nil, dob: Date? = nil) {
         self.id = id
         self.name = name
         self.floor = floor
         self.room = room
         self.bed = bed
+        self.dob = dob
+    }
+    
+    func ageInYears(on date: Date = Date()) -> Double? {
+            guard let dob else { return nil }
+            return date.timeIntervalSince(dob) / (365.2425 * 24 * 60 * 60)
     }
 }
 
-struct CompoundOrder: Identifiable, Hashable, Codable {
-    let id: UUID
+@Model
+final class CompoundOrder {
+    @Attribute(.unique) var id: UUID
     var orderNumber: String
     var patient: Patient
     var medicationName: String
@@ -75,18 +73,12 @@ struct CompoundOrder: Identifiable, Hashable, Codable {
     var components: [CompoundComponent]
     var captures: [CompoundCapture]
     var status: OrderStatus
-    var currentStepIndex: Int = 0
-    var remediation: RemediationRequest? = nil
-    
-    /// The verification record (who approved/rejected and when).
-    /// Non-nil once verification has occurred.
-    var verificationRecord: VerificationRecord? = nil
-    
-    /// Audit trail of all scannable/verifiable actions on this order.
-    var auditEvents: [AuditEvent] = []
-    
+    var currentStepIndex: Int
+    var remediation: RemediationRequest?
+    var verificationRecord: VerificationRecord?
+    var auditEvents: [AuditEvent]
+
     var finalContainerKind: ContainerKind? {
-        // Normalize: lowercase, unify separators to single spaces, collapse runs.
         let normalized = finalContainer
             .lowercased()
             .replacingOccurrences(of: #"[-_/.,]"#, with: " ", options: .regularExpression)
@@ -95,38 +87,28 @@ struct CompoundOrder: Identifiable, Hashable, Codable {
 
         guard !normalized.isEmpty else { return nil }
 
-        // Whole-word / boundary match via regex. Patterns are tried in priority order.
         func matches(_ pattern: String) -> Bool {
             normalized.range(of: pattern, options: .regularExpression) != nil
         }
 
-        // 1. CADD / elastomeric / ambulatory devices — most specific, check first.
         let caddPattern = #"\b(cadd|elastomeric|elastomer|homepump|easypump|infusor|intermate|eclipse|folfusor|ambulatory\s*pump|(pump|medication|reservoir)\s*cassette|cassette\s*reservoir)\b"#
         if matches(caddPattern) { return .CADD }
 
-        // 2. Syringe — luer/prefilled/branded syringe systems.
         let syringePattern = #"\b(syringe|syr|luer(\s*(lock|slip|oral))?|prefilled\s*syringe|pca\s*syringe|tubex|carpuject)\b"#
         if matches(syringePattern) { return .Syringe }
 
-        // 3. IV piggyback / minibag / volume bags.
-        //    \bns\b and \bd5w?\b are now safe because of word boundaries.
         let ivpbPattern = #"\b(ivpb|piggy\s*back|piggy|mini\s*bag|viaflex|viaflo|excel|freeflex|lvp|svp|iv\s*bag|infusion\s*bag|bag|ns|nacl|normal\s*saline|saline|d5w?|d10w?|\d+\s*ml)\b"#
         if matches(ivpbPattern) { return .IVPB }
 
-        // 4. Present but unrecognized.
         return .Other
     }
 
-    /// Components whose scanned lots fully cover their target quantity.
     var fulfilledComponents: [CompoundComponent] {
         components.filter { $0.isFulfilled() }
     }
 
-    var fulfilledComponentCount: Int {
-        fulfilledComponents.count
-    }
+    var fulfilledComponentCount: Int { fulfilledComponents.count }
 
-    /// Components that still need at least one more lot or more quantity.
     var unfulfilledComponents: [CompoundComponent] {
         components.filter { !$0.isFulfilled() }
     }
@@ -135,24 +117,18 @@ struct CompoundOrder: Identifiable, Hashable, Codable {
         !components.isEmpty && unfulfilledComponents.isEmpty
     }
 
-    /// Whether captures can still be edited/deleted (locked once handed off
-    /// to verification or beyond).
     var captureMutationsAllowed: Bool {
         switch status {
-        case .pending, .compounding, .remediation:
-            return true
-        case .readyForVerification, .approved, .rejected:
-            return false
+        case .pending, .compounding, .remediation: return true
+        case .waitingForApproval, .approved, .rejected: return false
         }
     }
 
-    /// Parsed recipe steps. Strips leading numbering like "1." or "1)".
     var recipeSteps: [String] {
         recipeText
             .split(whereSeparator: \.isNewline)
             .map { line -> String in
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
-                // Strip leading "N." or "N)" if present
                 if let range = trimmed.range(of: #"^\d+[\.\)]\s*"#, options: .regularExpression) {
                     return String(trimmed[range.upperBound...])
                 }
@@ -172,27 +148,23 @@ struct CompoundOrder: Identifiable, Hashable, Codable {
         min(max(currentStepIndex, 0), max(recipeSteps.count - 1, 0)) + 1
     }
 
-    var totalStepCount: Int {
-        recipeSteps.count
-    }
-    
-    /// Summary of verification status for display.
+    var totalStepCount: Int { recipeSteps.count }
+
     var verificationStatus: String {
         if let record = verificationRecord {
             let decision = record.isApproved ? "✓ Approved" : "✗ Rejected"
             return "\(decision) by \(record.verifiedBy.username) on \(record.verifiedAt.formatted(date: .abbreviated, time: .standard))"
-        } else if status == .readyForVerification {
+        } else if status == .waitingForApproval {
             return "Awaiting verification"
         } else {
             return "Not yet submitted for verification"
         }
     }
-    
-    /// True if any component has a pending (un-cosigned) override.
+
     var hasPendingOverrides: Bool {
         components.contains { $0.hasPendingOverrides }
     }
-    
+
     init(
         id: UUID = UUID(),
         orderNumber: String,
@@ -227,3 +199,6 @@ struct CompoundOrder: Identifiable, Hashable, Codable {
         self.auditEvents = auditEvents
     }
 }
+
+
+

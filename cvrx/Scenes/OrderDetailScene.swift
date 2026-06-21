@@ -6,8 +6,8 @@ import SwiftUI
 /// step card, which is where the user is mentally focused when they want to
 /// take a picture.
 struct OrderDetailScene: View {
-    @Binding var order: CompoundOrder
-    @EnvironmentObject var user: User
+    @Environment(\.currentUser) var user
+    var order: CompoundOrder
     let store: CompoundingStore
 
     @State private var showMissingComponentOverride = false
@@ -54,6 +54,7 @@ struct OrderDetailScene: View {
                                 componentID: component.id,
                                 lot: lot.lot,
                                 expiration: lot.expiration,
+                                mfg: lot.mfg,
                                 quantity: lot.strengthQuantity,
                                 enteredBy: user
                             )
@@ -143,7 +144,7 @@ struct OrderDetailScene: View {
         }
         .navigationDestination(isPresented: $navigateToCompounding) {
             CompoundingScene(
-                order: $order,
+                order: order,
                 store: store
             )
         }
@@ -422,7 +423,7 @@ struct CurrentStepCard: View {
             Button(action: onCapture) {
                 Label("Capture", systemImage: "camera.fill")
                     .font(.headline)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: 32)
                     .padding(.vertical, 6)
             }
             .buttonStyle(.borderedProminent)
@@ -524,34 +525,32 @@ struct BottomActionBar: View {
     let onSend: () -> Void
 
     var body: some View {
-        Group {
-            if order.captures.isEmpty {
-                EmptyView()
-            } else if order.status == .readyForVerification {
-                HStack(spacing: 8) {
-                    Image(systemName: "hourglass")
-                    Text("In verification queue")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .foregroundStyle(.orange)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .padding(.horizontal, 16)
-                .background(.bar)
-            } else if order.status == .approved || order.status == .rejected {
-                EmptyView()
-            } else {
-                Button(action: onSend) {
-                    Label("Send to Verification", systemImage: "checkmark.seal.fill")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(.bar)
+        if order.captures.isEmpty {
+            EmptyView()
+        } else if order.status == .waitingForApproval {
+            HStack(spacing: 8) {
+                Image(systemName: "hourglass")
+                Text("In verification queue")
+                    .font(.subheadline.weight(.semibold))
             }
+            .foregroundStyle(.orange)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .padding(.horizontal, 16)
+            .background(.bar)
+        } else if order.status == .approved || order.status == .rejected {
+            EmptyView()
+        } else {
+            Button(action: onSend) {
+                Label("Send to Verification", systemImage: "checkmark.seal.fill")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(.bar)
         }
     }
 }

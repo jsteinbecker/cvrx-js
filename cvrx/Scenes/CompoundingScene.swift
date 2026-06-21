@@ -4,8 +4,8 @@ import SwiftUI
 /// Focused purely on capture — verification is reached separately from the
 /// Verification tab. "Done" pops back to the order detail.
 struct CompoundingScene: View {
-    @Binding var order: CompoundOrder
-    @EnvironmentObject var user: User
+    var order: CompoundOrder
+    @Environment(\.currentUser) var user
     let store: CompoundingStore
 
     @State private var camera = CameraController()
