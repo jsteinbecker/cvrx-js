@@ -14,6 +14,7 @@ final class CompoundingStore {
         let descriptor = FetchDescriptor<CompoundOrder>()
         guard (try? modelContext.fetchCount(descriptor)) == 0 else { return }
         MockData.makeSampleOrders(into: modelContext)
+        MockData.makeFacility(into: modelContext)
     }
 
     private func order(for id: CompoundOrder.ID) -> CompoundOrder? {
@@ -125,10 +126,10 @@ final class CompoundingStore {
         var previousValue = ""
 
         switch field {
-        case "barcode":   previousValue = lot.barcodeValue ?? ""
-        case "lot":       previousValue = lot.lot
-        case "expiration": previousValue = lot.expiration?.formatted(date: .abbreviated, time: .omitted) ?? ""
-        default: return
+            case "barcode":    previousValue = lot.barcodeValue ?? ""
+            case "lot":        previousValue = lot.lot
+            case "expiration": previousValue = lot.expiration?.formatted(date: .abbreviated, time: .omitted) ?? ""
+            default: return
         }
 
         let override = ScanOverride(
@@ -140,15 +141,13 @@ final class CompoundingStore {
         )
 
         switch field {
-        case "barcode":
-            order.components[componentIndex].utilizedLots[lotIndex].barcodeValue = newValue
-        case "lot":
-            order.components[componentIndex].utilizedLots[lotIndex].lot = newValue
-        case "expiration":
-            if let date = parseDate(newValue) {
-                order.components[componentIndex].utilizedLots[lotIndex].expiration = date
-            }
-        default: break
+            case "barcode": order.components[componentIndex].utilizedLots[lotIndex].barcodeValue = newValue
+            case "lot": order.components[componentIndex].utilizedLots[lotIndex].lot = newValue
+            case "expiration":
+                if let date = parseDate(newValue) {
+                    order.components[componentIndex].utilizedLots[lotIndex].expiration = date
+                }
+            default: break
         }
 
         order.components[componentIndex].utilizedLots[lotIndex].overrides.append(override)
@@ -192,7 +191,7 @@ final class CompoundingStore {
                 componentID: componentID,
                 lotID: lotID,
                 field: override.field,
-                cosignedBy: cosignedBy
+                cosignedBy: cosignedBy.snapshot
             ),
             context: "Verifier approval of \(override.field) correction"
         ))
@@ -254,7 +253,7 @@ final class CompoundingStore {
 
         order.captures.removeAll { $0.id == captureID }
 
-        if var rem = order.remediation {
+        if let rem = order.remediation {
             rem.flags.removeAll { $0.captureID == captureID }
             order.remediation = rem
         }
@@ -343,7 +342,7 @@ final class CompoundingStore {
                 orderID: orderID,
                 remediationRequestID: remediation.id,
                 reason: reason,
-                requestedBy: requestedBy
+                requestedBy: requestedBy.snapshot
             ),
             context: "Rejected during verification; sent back to compounder for fixes"
         ))
@@ -359,7 +358,7 @@ final class CompoundingStore {
     ) {
         guard capturedBy.role.canRemediate else { return }
         guard let order = order(for: orderID),
-              var remediation = order.remediation
+              let remediation = order.remediation
         else { return }
 
         let capture = RemediationCapture(
@@ -391,11 +390,11 @@ final class CompoundingStore {
         lotID: CompoundUtilizedLot.ID,
         changeType: String,
         madeBy: User,
-        description: String? = nil
+        descr: String? = nil
     ) {
         guard madeBy.role.canRemediate else { return }
         guard let order = order(for: orderID),
-              var remediation = order.remediation
+              let remediation = order.remediation
         else { return }
 
         let change = RemediationLotChange(
@@ -404,7 +403,7 @@ final class CompoundingStore {
             lotID: lotID,
             changeType: changeType,
             madeBy: madeBy,
-            description: description
+            descr: descr
         )
 
         remediation.lotChanges.append(change)
@@ -414,7 +413,7 @@ final class CompoundingStore {
     func completeRemediation(orderID: CompoundOrder.ID, completedBy: User) {
         guard completedBy.role.canRemediate else { return }
         guard let order = order(for: orderID),
-              var remediation = order.remediation
+              let remediation = order.remediation
         else { return }
 
         remediation.completedBy = completedBy
@@ -427,7 +426,7 @@ final class CompoundingStore {
             action: .remediationCompleted(
                 orderID: orderID,
                 remediationRequestID: remediation.id,
-                completedBy: completedBy
+                completedBy: completedBy.snapshot
             ),
             context: "Remediation fixes complete; resubmitted for verification"
         ))

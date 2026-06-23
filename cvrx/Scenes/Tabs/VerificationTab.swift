@@ -42,7 +42,7 @@ struct VerificationTab: View {
                             .symbolRenderingMode(.palette)
                             .foregroundStyle(Color.green, Color.white, Color.gray)
                             .font(.system(size: 16, weight: .regular))
-                        Text(user.name)
+                        Text(user!.name)
                     }
                 }
             }

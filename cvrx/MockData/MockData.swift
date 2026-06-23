@@ -384,3 +384,58 @@ struct SeededGenerator: RandomNumberGenerator {
         return z ^ (z >> 31)
     }
 }
+
+
+extension MockData {
+    @MainActor
+    static func makeFacility(into context: ModelContext, floors: Int = 5, avgBeds: Int = 10) {
+        let facility = Facility(
+            id: UUID(),
+            name: "General Hospital",
+            abv: "GH"
+        )
+        context.insert(facility)
+
+        let floorTypes: [FloorType] = [.ms, .pc, .ic, .ob, .op]
+        let floorNames: [FloorType: String] = [
+            .ms: "Med/Surg",
+            .pc: "Progressive Care",
+            .ic: "ICU",
+            .ob: "Obstetrics",
+            .op: "Outpatient"
+        ]
+
+        for i in 0..<floors {
+            let floorType = floorTypes[i % floorTypes.count]
+            let bedsPerRoom = max(1, avgBeds / 5 + Int.random(in: -1...1))
+
+            let floor = FloorUnit(
+                id: UUID(),
+                name: "\(floorNames[floorType] ?? "Floor") \(i + 1)",
+                facility: facility,
+                floorType: floorType,
+                bedsPerRoom: bedsPerRoom
+            )
+            context.insert(floor)
+
+            let roomCount = Int.random(in: 4...8)
+            for r in 0..<roomCount {
+                let room = Room(
+                    id: UUID(),
+                    floor: floor,
+                    name: "\(100 + i * 10 + r)"
+                )
+                context.insert(room)
+
+                for b in 0..<bedsPerRoom {
+                    let bed = Bed(
+                        id: UUID(),
+                        name: facility.bedNamingRule.label(for: b),
+                        room: room
+                    )
+                    context.insert(bed)
+                }
+            }
+        }
+    }
+}

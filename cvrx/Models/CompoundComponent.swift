@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 // MARK: - Units
 
@@ -62,20 +63,18 @@ extension Double {
 
 // MARK: - Product (the catalog entry, not a physical lot)
 
-struct Product: Identifiable, Hashable, Codable {
-    let id: UUID
+@Model
+final class Product {
+    @Attribute(.unique) var id: UUID
     var name: String
     var linkedNDCs: [String]
-
     /// Labeled strength of the product (e.g. 50 for "50 mg/mL" or "500 mg vial").
     var strength: Double
     var strengthUnit: QuantityUnit
-
     /// If the product is a solution, the volume associated with `strength`.
     /// e.g. heparin 5000 units/mL → strength=5000, strengthUnit=.units, mlConcentration=1
     /// A dry vial would leave this nil.
     var mlConcentration: Double?
-
     /// Convenience: is this product a liquid concentration vs. a solid dose form?
     var isSolution: Bool { mlConcentration != nil }
 
@@ -100,20 +99,21 @@ struct Product: Identifiable, Hashable, Codable {
 
 /// When a scanned lot's data is corrected (barcode wrong, lot corrected, expiration adjusted),
 /// this record documents the change and stores the cosigner.
-struct ScanOverride: Identifiable, Hashable, Codable {
-    let id: UUID
+@Model
+final class ScanOverride {
+    @Attribute(.unique) var id: UUID
     /// Which lot this override applies to.
-    let lotID: UUID
+    var lotID: UUID
     /// The field that was changed ("barcode", "lot", "expiration").
-    let field: String
+    var field: String
     /// Original value from the scan.
-    let previousValue: String
+    var previousValue: String
     /// New value after override.
-    let newValue: String
+    var newValue: String
     /// User who performed the override.
-    let overriddenBy: User
+    var overriddenBy: User
     /// When the override was applied.
-    let overriddenAt: Date
+    var overriddenAt: Date
     /// If non-nil, the verifier who co-signed this override.
     var cosignedBy: User?
     /// When the cosign occurred (nil if not yet cosigned).
@@ -156,8 +156,9 @@ struct ScanOverride: Identifiable, Hashable, Codable {
 
 // MARK: - Utilized Lot (one physical container drawn from)
 
-struct CompoundUtilizedLot: Identifiable, Hashable, Codable {
-    let id: UUID
+@Model
+final class CompoundUtilizedLot {
+    @Attribute(.unique) var id: UUID
     var barcodeValue: String?
     var lot: String
     var expiration: Date?
@@ -214,8 +215,9 @@ struct CompoundUtilizedLot: Identifiable, Hashable, Codable {
 
 // MARK: - Compound Component (one line item in a compound recipe)
 
-struct CompoundComponent: Identifiable, Hashable, Codable {
-    let id: UUID
+@Model
+final class CompoundComponent {
+    @Attribute(.unique) var id: UUID
     var product: Product
     /// The total target quantity for this component.
     var totalQuantity: Double
@@ -277,8 +279,9 @@ struct CompoundComponent: Identifiable, Hashable, Codable {
 
 // MARK: - Compound (the parent record)
 
-struct Compound: Identifiable, Hashable, Codable {
-    let id: UUID
+@Model
+final class Compound {
+    @Attribute(.unique) var id: UUID
     var name: String
     var rxNumber: String?
     var preparedBy: String?

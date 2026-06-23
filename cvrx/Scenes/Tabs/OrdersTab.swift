@@ -57,8 +57,7 @@ struct OrdersTab: View {
                             .symbolRenderingMode(.palette)
                             .foregroundStyle(Color.green, Color.white, Color.gray)
                             .font(.system(size: 16, weight: .regular))
-
-                        Text(user.name)
+                        Text(user!.name)
                     }
                 }
 
@@ -139,6 +138,7 @@ private enum SidebarSelection: Hashable {
 
 private enum OrderStatusFilter: String, CaseIterable, Identifiable {
     case pending
+    case preparing
     case waitingForApproval
     case remediation
     case approved
@@ -150,6 +150,8 @@ private enum OrderStatusFilter: String, CaseIterable, Identifiable {
         switch self {
         case .pending:
             "Pending"
+        case .preparing:
+            "Preparing"
         case .waitingForApproval:
             "Waiting for Approval"
         case .remediation:
@@ -165,6 +167,8 @@ private enum OrderStatusFilter: String, CaseIterable, Identifiable {
         switch self {
         case .pending:
             "clock"
+        case .preparing:
+            "syringe"
         case .waitingForApproval:
             "hourglass"
         case .remediation:
@@ -180,6 +184,8 @@ private enum OrderStatusFilter: String, CaseIterable, Identifiable {
         switch self {
         case .pending:
             order.status == .pending
+        case .preparing:
+            order.status == .preparing
         case .waitingForApproval:
             order.status == .waitingForApproval
         case .remediation:

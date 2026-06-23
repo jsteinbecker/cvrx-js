@@ -100,7 +100,7 @@ struct CompoundingScene: View {
                             orderID: order.id,
                             kind: kind,
                             imageURL: imageURL,
-                            capturedBy: user
+                            capturedBy: user!
                         )
                 }
             } catch {
@@ -111,7 +111,7 @@ struct CompoundingScene: View {
                             orderID: order.id,
                             kind: kind,
                             imageURL: nil,
-                            capturedBy: user
+                            capturedBy: user!
                         )
                 }
             }

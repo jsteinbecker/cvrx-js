@@ -1,9 +1,11 @@
 import Foundation
+import SwiftData
 
 /// An image captured during compounding.
 /// Records who took the photo, what kind it is, and when.
-struct CompoundCapture: Identifiable, Hashable, Codable {
-    let id: UUID
+@Model
+final class CompoundCapture {
+    @Attribute(.unique) var id: UUID
     /// Type of capture (reference, auxiliary, etc.)
     var kind: CaptureKind
     /// Who captured this image.

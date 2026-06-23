@@ -18,7 +18,9 @@ struct CameraPreview: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
-        uiView.videoPreviewLayer.session = session
+        if uiView.videoPreviewLayer.session !== session {
+            uiView.videoPreviewLayer.session = session
+        }
     }
 }
 
@@ -43,7 +45,9 @@ struct CameraPreview: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: PreviewView, context: Context) {
-        nsView.videoPreviewLayer.session = session
+        if nsView.videoPreviewLayer.session !== session {
+            nsView.videoPreviewLayer.session = session
+        }
     }
 }
 

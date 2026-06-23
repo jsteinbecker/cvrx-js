@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 // MARK: - Capture Flag (pin on remediation image)
 
@@ -24,11 +25,12 @@ struct CaptureFlag: Identifiable, Hashable, Codable {
 /// An image captured during remediation to document a fix.
 /// Separate from original CompoundCapture so we can distinguish
 /// problem documentation (original) from solution documentation (remediation).
-struct RemediationCapture: Identifiable, Hashable, Codable {
-    let id: UUID
-    let remediationRequestID: UUID
-    let capturedBy: User
-    let capturedAt: Date
+@Model
+final class RemediationCapture {
+    @Attribute(.unique) var id: UUID
+    var remediationRequestID: UUID
+    var capturedBy: User
+    var capturedAt: Date
     var imageURL: URL?
     var imageName: String?
     var note: String?
@@ -55,15 +57,16 @@ struct RemediationCapture: Identifiable, Hashable, Codable {
 // MARK: - Remediation Lot Change
 
 /// A change made to a lot during remediation (e.g., replaced, re-scanned, lot data corrected).
-struct RemediationLotChange: Identifiable, Hashable, Codable {
-    let id: UUID
-    let remediationRequestID: UUID
-    let componentID: UUID
-    let lotID: UUID
-    let changeType: String
-    let madeBy: User
-    let madeAt: Date
-    var description: String?
+@Model
+final class RemediationLotChange {
+    @Attribute(.unique) var id: UUID
+    var remediationRequestID: UUID
+    var componentID: UUID
+    var lotID: UUID
+    var changeType: String
+    var madeBy: User
+    var madeAt: Date
+    var descr: String?
 
     init(
         id: UUID = UUID(),
@@ -73,7 +76,7 @@ struct RemediationLotChange: Identifiable, Hashable, Codable {
         changeType: String,
         madeBy: User,
         madeAt: Date = Date(),
-        description: String? = nil
+        descr: String? = nil
     ) {
         self.id = id
         self.remediationRequestID = remediationRequestID
@@ -82,11 +85,11 @@ struct RemediationLotChange: Identifiable, Hashable, Codable {
         self.changeType = changeType
         self.madeBy = madeBy
         self.madeAt = madeAt
-        self.description = description
+        self.descr = descr
     }
     
     var summary: String {
-        let desc = description.map { " — \($0)" } ?? ""
+        let desc = descr.map { " — \($0)" } ?? ""
         return "\(changeType)\(desc) [by \(madeBy.username)]"
     }
 }
@@ -99,10 +102,11 @@ struct RemediationLotChange: Identifiable, Hashable, Codable {
 /// A remediation spans from request through resubmission and includes
 /// who requested it, who completed it, what changed during remediation,
 /// and what images were captured to document the fixes.
-struct RemediationRequest: Identifiable, Hashable, Codable {
-    let id: UUID
-    let requestedBy: User
-    let requestedAt: Date
+@Model
+final class RemediationRequest {
+    @Attribute(.unique) var id: UUID
+    var requestedBy: User
+    var requestedAt: Date
     var reason: String
     var flags: [CaptureFlag]
     var completedBy: User?

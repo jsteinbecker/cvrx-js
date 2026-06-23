@@ -43,7 +43,8 @@ struct StatusPill: View {
 
     private var statusColor: Color {
         switch status {
-        case .pending: .secondary
+        case .pending: .gray
+        case .preparing: .secondary
         case .compounding: .blue
         case .waitingForApproval: .orange
         case .remediation: .purple

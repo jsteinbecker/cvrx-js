@@ -113,7 +113,12 @@ struct VerifyScene: View {
                     .disabled(order.captures.isEmpty)
 
                     Button {
-                        store.verify(orderID: order.id, verifiedBy: user, approved: true)
+                        store
+                            .verify(
+                                orderID: order.id,
+                                verifiedBy: user!,
+                                approved: true
+                            )
                         dismiss()
                     } label: {
                         Label("Approve", systemImage: "checkmark.seal.fill")
@@ -131,8 +136,14 @@ struct VerifyScene: View {
                 captures: chronologicalCaptures,
                 initialIndex: currentIndex,
                 onCancel: { showRemediateSheet = false },
-                onSubmit: { reason, flags in
-                    store.createRemediationRequest(orderID: order.id, reason: reason, requestedBy: user)
+                onSubmit: { reason,
+                    flags in
+                    store
+                        .createRemediationRequest(
+                            orderID: order.id,
+                            reason: reason,
+                            requestedBy: user!
+                        )
                     showRemediateSheet = false
                     dismiss()
                 }
@@ -156,7 +167,12 @@ struct VerifyScene: View {
 
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Reject") {
-                            store.verify(orderID: order.id, verifiedBy: user, approved: false)
+                            store
+                                .verify(
+                                    orderID: order.id,
+                                    verifiedBy: user!,
+                                    approved: false
+                                )
                             showRejectSheet = false
                             dismiss()
                         }

@@ -46,7 +46,7 @@ struct OrderDetailScene: View {
                                 detectedLot: lot.lot,
                                 detectedExpiration: lot.expiration,
                                 quantity: lot.strengthQuantity,
-                                scannedBy: user
+                                scannedBy: user!
                             )
                         } else {
                             store.addLotManually(
@@ -56,7 +56,7 @@ struct OrderDetailScene: View {
                                 expiration: lot.expiration,
                                 mfg: lot.mfg,
                                 quantity: lot.strengthQuantity,
-                                enteredBy: user
+                                enteredBy: user!
                             )
                         }
                     },

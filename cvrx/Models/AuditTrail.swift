@@ -1,24 +1,28 @@
 import Foundation
+import SwiftData
 
 // MARK: - Audit Trail Events
 
 /// The immutable record of who did what, when, and why.
 /// Every action that requires traceability generates one of these.
-struct AuditEvent: Identifiable, Hashable, Codable {
-    let id: UUID
-    
+@Model
+final class AuditEvent {
+    @Attribute(.unique) var id: UUID
     /// The user who performed the action.
-    let actor: User
-    
+    var actor: User
     /// When the action occurred.
-    let timestamp: Date
-    
-    /// The type of action and its details.
-    let action: AuditAction
-    
+    var timestamp: Date
+    /// JSON-encoded AuditAction — stored as Data to avoid SwiftData composite-attribute introspection failures with enums.
+    var actionData: Data
     /// Optional context: reason, comment, or correlation ID for grouped operations.
-    let context: String?
-    
+    var context: String?
+
+    /// The type of action and its details.
+    var action: AuditAction {
+        get { try! JSONDecoder().decode(AuditAction.self, from: actionData) }
+        set { actionData = try! JSONEncoder().encode(newValue) }
+    }
+
     init(
         id: UUID = UUID(),
         actor: User,
@@ -29,7 +33,7 @@ struct AuditEvent: Identifiable, Hashable, Codable {
         self.id = id
         self.actor = actor
         self.timestamp = timestamp
-        self.action = action
+        self.actionData = try! JSONEncoder().encode(action)
         self.context = context
     }
     
@@ -38,6 +42,23 @@ struct AuditEvent: Identifiable, Hashable, Codable {
         let roleLabel = actor.role.rawValue
         let userInfo = "\(actor.username) (\(roleLabel))"
         return "\(timestamp.formatted(date: .abbreviated, time: .standard)): \(userInfo) — \(action.summary)"
+    }
+}
+
+// MARK: - User Snapshot
+
+/// Immutable snapshot of user identity captured at the time of an audit event.
+/// Using a value type avoids embedding a SwiftData class reference inside a
+/// persisted Codable enum, which SwiftData does not support.
+struct UserSnapshot: Codable, Hashable {
+    let id: UUID
+    let username: String
+    let name: String
+}
+
+extension User {
+    var snapshot: UserSnapshot {
+        UserSnapshot(id: id, username: username, name: name)
     }
 }
 
@@ -80,7 +101,7 @@ enum AuditAction: Hashable, Codable {
         componentID: UUID,
         lotID: UUID,
         field: String,
-        cosignedBy: User
+        cosignedBy: UserSnapshot
     )
     
     /// An image was captured during compounding.
@@ -111,14 +132,14 @@ enum AuditAction: Hashable, Codable {
         orderID: UUID,
         remediationRequestID: UUID,
         reason: String,
-        requestedBy: User  // The verifier who requested it
+        requestedBy: UserSnapshot
     )
     
     /// Remediation (re-do of captures, lot corrections, etc.) was completed and resubmitted.
     case remediationCompleted(
         orderID: UUID,
         remediationRequestID: UUID,
-        completedBy: User  // The compounder/tech who completed it
+        completedBy: UserSnapshot
     )
     
     var summary: String {
@@ -157,7 +178,7 @@ extension AuditAction {
         case actor, completedBy, requestedBy
     }
     
-    func encode(to encoder: Encoder) throws {
+    nonisolated func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         
         switch self {
@@ -230,7 +251,7 @@ extension AuditAction {
         }
     }
     
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
         
@@ -266,7 +287,7 @@ extension AuditAction {
             let componentID = try container.decode(UUID.self, forKey: .componentID)
             let lotID = try container.decode(UUID.self, forKey: .lotID)
             let field = try container.decode(String.self, forKey: .field)
-            let cosignedBy = try container.decode(User.self, forKey: .actor)
+            let cosignedBy = try container.decode(UserSnapshot.self, forKey: .actor)
             self = .scanOverrideCosigned(orderID: orderID, componentID: componentID, lotID: lotID, field: field, cosignedBy: cosignedBy)
             
         case "imageCaptured":
@@ -293,13 +314,13 @@ extension AuditAction {
             let orderID = try container.decode(UUID.self, forKey: .orderID)
             let remediationRequestID = try container.decode(UUID.self, forKey: .remediationRequestID)
             let reason = try container.decode(String.self, forKey: .reason)
-            let requestedBy = try container.decode(User.self, forKey: .requestedBy)
+            let requestedBy = try container.decode(UserSnapshot.self, forKey: .requestedBy)
             self = .remediationRequested(orderID: orderID, remediationRequestID: remediationRequestID, reason: reason, requestedBy: requestedBy)
             
         case "remediationCompleted":
             let orderID = try container.decode(UUID.self, forKey: .orderID)
             let remediationRequestID = try container.decode(UUID.self, forKey: .remediationRequestID)
-            let completedBy = try container.decode(User.self, forKey: .completedBy)
+            let completedBy = try container.decode(UserSnapshot.self, forKey: .completedBy)
             self = .remediationCompleted(orderID: orderID, remediationRequestID: remediationRequestID, completedBy: completedBy)
             
         default:
