@@ -119,6 +119,12 @@ struct VerifyScene: View {
                                 verifiedBy: user!,
                                 approved: true
                             )
+                        order.status = .approved
+                        order.verificationRecord = VerificationRecord(
+                            verifiedBy: user!,
+                            verifiedAt: Date(),
+                            decision: .approved
+                        )
                         dismiss()
                     } label: {
                         Label("Approve", systemImage: "checkmark.seal.fill")
@@ -144,6 +150,7 @@ struct VerifyScene: View {
                             reason: reason,
                             requestedBy: user!
                         )
+                    order.status = .remediation
                     showRemediateSheet = false
                     dismiss()
                 }
@@ -173,6 +180,13 @@ struct VerifyScene: View {
                                     verifiedBy: user!,
                                     approved: false
                                 )
+                            order.status = .rejected
+                            order.verificationRecord = VerificationRecord(
+                                verifiedBy: user!,
+                                verifiedAt: Date(),
+                                decision: .rejected,
+                                rejectionReason: rejectionReason.trimmingCharacters(in: .whitespacesAndNewlines)
+                            )
                             showRejectSheet = false
                             dismiss()
                         }
@@ -185,7 +199,6 @@ struct VerifyScene: View {
     }
 }
 
-// MARK: - Zoomable carousel
 
 /// Horizontal-swipe carousel. Each page hosts a pinch/double-tap-to-zoom image.
 struct ZoomableCarousel: View {
@@ -197,7 +210,7 @@ struct ZoomableCarousel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-#if os(macOS)
+            #if os(macOS)
             if captures.indices.contains(currentIndex) {
                 let capture = captures[currentIndex]
                 ZoomableImageView(
@@ -205,7 +218,7 @@ struct ZoomableCarousel: View {
                     badge: order.badge(for: capture)
                 )
             }
-#else
+            #else
             TabView(selection: $currentIndex) {
                 ForEach(Array(captures.enumerated()), id: \.element.id) { idx, capture in
                     ZoomableImageView(
@@ -215,13 +228,8 @@ struct ZoomableCarousel: View {
                     .tag(idx)
                 }
             }
-            // PageTabViewStyle is available on iOS, macOS 11+, watchOS, and
-            // tvOS — applying it unconditionally avoids macOS falling back
-            // to the default tab-bar style, which would render an empty tab
-            // strip above the carousel (one blank tab per capture, since
-            // none of the pages declares a `.tabItem`).
             .tabViewStyle(.page(indexDisplayMode: .never))
-#endif
+            #endif
 
             // Footer: index, current-image badge pill, kind label.
             HStack(spacing: 10) {
@@ -376,7 +384,6 @@ struct ZoomableImageView: View {
     }
 }
 
-// MARK: - Thumbnail strip
 
 struct CarouselThumbnailStrip: View {
     let captures: [CompoundCapture]
@@ -398,9 +405,6 @@ struct CarouselThumbnailStrip: View {
                                 size: 56,
                                 badge: order.badge(for: capture)
                             )
-                            // Active-selection outline rendered on top of the
-                            // badge border so the user can always see which
-                            // thumbnail is selected, even when it's also flagged.
                             .overlay(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .strokeBorder(

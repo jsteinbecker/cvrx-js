@@ -15,14 +15,25 @@ struct OrdersTab: View {
 
     @Query(sort: \CompoundOrder.dueTime)
     private var orders: [CompoundOrder]
+    
+    private func count(for status: OrderStatusFilter) -> Int {
+        orders.filter { status.matches($0) }.count   // swap in your real predicate
+    }
 
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
                 Section {
                     ForEach(OrderStatusFilter.allCases) { status in
-                        Label(status.title, systemImage: status.systemImage)
-                            .tag(SidebarSelection.status(status))   // tag type must match the binding
+                        let ct = count(for: status)
+                        HStack {
+                            Label(status.title, systemImage: status.systemImage)
+                            Spacer()
+                            if ct > 0 {
+                                Badge(text: "\(ct)", color: .secondary)
+                            }
+                        }
+                        .tag(SidebarSelection.status(status))
                     }
                 }
             }
@@ -77,6 +88,10 @@ struct OrdersTab: View {
             switch selection {
             case .status(let status):
                 ordersDetail(for: status)
+            case .extra(.facility):
+                NavigationStack {
+                    FacilityOverviewScene()
+                }
             case .extra(.labelers):
                 NavigationStack {
                     LabelersScene()
@@ -199,20 +214,46 @@ private enum OrderStatusFilter: String, CaseIterable, Identifiable {
 }
 
 private enum SidebarExtra: String, CaseIterable, Identifiable {
+    case facility
     case labelers
 
     var id: Self { self }
 
     var title: String {
         switch self {
+        case .facility: "Facility"
         case .labelers: "Labelers"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .labelers: "building.2"
+        case .facility: "building.2.fill"
+        case .labelers: "shippingbox.fill"
         }
+    }
+}
+
+struct Badge: View {
+    @State private var text: String
+    @State private var color: Color
+
+    init(text: String = "Badge", color: Color = .accentColor) {
+        _text = State(initialValue: text)
+        _color = State(initialValue: color)
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(color.opacity(0.15))
+            )
+            .onTapGesture { color = .green; text = "Verified" }
     }
 }
 

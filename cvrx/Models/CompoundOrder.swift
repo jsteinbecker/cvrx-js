@@ -9,14 +9,14 @@ final class VerificationRecord {
     @Attribute(.unique) var id: UUID
     var verifiedBy: User
     var verifiedAt: Date
-    var decision: String
+    var decision: VerificationDecision
     var rejectionReason: String?
 
     init(
         id: UUID = UUID(),
         verifiedBy: User,
         verifiedAt: Date = Date(),
-        decision: String,
+        decision: VerificationDecision,
         rejectionReason: String? = nil
     ) {
         self.id = id
@@ -26,7 +26,13 @@ final class VerificationRecord {
         self.rejectionReason = rejectionReason
     }
 
-    var isApproved: Bool { decision == "Approved" }
+    var isApproved: Bool { decision == .approved }
+}
+
+enum VerificationDecision: String, Hashable, Codable {
+    case approved = "approved"
+    case rejected = "rejected"
+    case cancelled = "cancelled"
 }
 
 enum ContainerKind: String, Hashable, Codable {

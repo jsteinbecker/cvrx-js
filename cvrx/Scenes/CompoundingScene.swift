@@ -1,8 +1,15 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Live camera scene for capturing reference and auxiliary images.
 /// Focused purely on capture — verification is reached separately from the
 /// Verification tab. "Done" pops back to the order detail.
+///
+/// Capture flow: tapping a capture button takes the photo, and on success
+/// advances the recipe to the next step so the compounder can shoot the next
+/// one without leaving the camera. Failed captures do NOT advance the step.
 struct CompoundingScene: View {
     var order: CompoundOrder
     @Environment(\.currentUser) var user
@@ -12,6 +19,12 @@ struct CompoundingScene: View {
     @State private var cameraErrorMessage: String?
     @State private var showRecipeSheet = false
     @State private var showGridSheet = false
+
+    // Capture-in-flight state. Prevents double-taps spawning parallel
+    // captures and lets us disable the controls + show activity.
+    @State private var isCapturing = false
+    // Held so an in-flight capture is cancelled if the scene disappears.
+    @State private var captureTask: Task<Void, Never>?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -44,6 +57,7 @@ struct CompoundingScene: View {
 
                 // Bottom bar: capture controls.
                 CameraControlBar(
+                    isCapturing: isCapturing,
                     onCaptureReference: { capture(.reference) },
                     onCaptureAux: { capture(.auxiliary) },
                     onRecipe: { showRecipeSheet = true },
@@ -72,6 +86,7 @@ struct CompoundingScene: View {
             }
         }
         .onDisappear {
+            captureTask?.cancel()
             camera.stop()
         }
         .sheet(isPresented: $showRecipeSheet) {
@@ -90,32 +105,70 @@ struct CompoundingScene: View {
         }
     }
 
+    // MARK: - Capture
+
+    /// Capture a photo of the given kind. On success, records the capture and
+    /// advances the recipe to the next step. On failure, records a no-image
+    /// capture (audit trail) and surfaces the error — without advancing.
     private func capture(_ kind: CaptureKind) {
-        Task {
+        // Ignore taps while a capture is already running.
+        guard !isCapturing else { return }
+        guard let user else {
+            cameraErrorMessage = "No signed-in user — cannot record capture."
+            return
+        }
+
+        isCapturing = true
+        captureTask = Task {
+            defer { isCapturing = false }
+
             do {
                 let imageURL = try await camera.capturePhoto(orderID: order.id, kind: kind)
-                await MainActor.run {
-                    store
-                        .addCapture(
-                            orderID: order.id,
-                            kind: kind,
-                            imageURL: imageURL,
-                            capturedBy: user!
-                        )
-                }
+
+                // Bail out cleanly if the scene went away mid-capture.
+                guard !Task.isCancelled else { return }
+
+                store.addCapture(
+                    orderID: order.id,
+                    kind: kind,
+                    imageURL: imageURL,
+                    capturedBy: user
+                )
+
+                // Advance the recipe only on a successful capture.
+                advanceStepAfterCapture(kind: kind)
+                captureFeedback(success: true)
             } catch {
-                await MainActor.run {
-                    cameraErrorMessage = error.localizedDescription
-                    store
-                        .addCapture(
-                            orderID: order.id,
-                            kind: kind,
-                            imageURL: nil,
-                            capturedBy: user!
-                        )
-                }
+                guard !Task.isCancelled else { return }
+
+                cameraErrorMessage = error.localizedDescription
+                store.addCapture(
+                    orderID: order.id,
+                    kind: kind,
+                    imageURL: nil,
+                    capturedBy: user
+                )
+                captureFeedback(success: false)
             }
         }
+    }
+
+    /// Advances to the next recipe step if one exists and this capture kind
+    /// should drive the recipe forward. Aux shots are supplementary, so by
+    /// default only reference captures advance the step — adjust if your
+    /// workflow wants aux to advance too.
+    private func advanceStepAfterCapture(kind: CaptureKind) {
+        guard kind == .reference else { return }
+        let next = order.currentStepIndex + 1
+        guard next < order.totalStepCount else { return }   // already on last step
+        store.setCurrentStep(orderID: order.id, stepIndex: next)
+    }
+
+    private func captureFeedback(success: Bool) {
+        #if os(iOS)
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(success ? .success : .error)
+        #endif
     }
 }
 
@@ -186,6 +239,7 @@ struct InCameraReferenceGrid: View {
 // MARK: - Camera control bar
 
 struct CameraControlBar: View {
+    var isCapturing: Bool = false
     let onCaptureReference: () -> Void
     let onCaptureAux: () -> Void
     let onRecipe: () -> Void
@@ -195,21 +249,42 @@ struct CameraControlBar: View {
         HStack(spacing: 16) {
             CircleIconButton(systemImage: "list.number", action: onRecipe)
                 .accessibilityLabel("Recipe steps")
+                .disabled(isCapturing)
 
-            CaptureButton(title: "Reference", systemImage: "camera.macro", action: onCaptureReference)
-                .frame(maxWidth: .infinity)
+            CaptureButton(
+                title: "Reference",
+                systemImage: "camera.macro",
+                action: onCaptureReference
+            )
+            .frame(maxWidth: .infinity)
+            .disabled(isCapturing)
 
-            CaptureButton(title: "Aux", systemImage: "camera.filters", action: onCaptureAux)
-                .frame(maxWidth: .infinity)
+            CaptureButton(
+                title: "Aux",
+                systemImage: "camera.filters",
+                action: onCaptureAux
+            )
+            .frame(maxWidth: .infinity)
+            .disabled(isCapturing)
 
             CircleIconButton(systemImage: "square.grid.2x2", action: onGrid)
                 .accessibilityLabel("Captured grid")
+                .disabled(isCapturing)
         }
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(.ultraThinMaterial)
         )
+        // Dim + spinner overlay so a slow capture never reads as a frozen bar.
+        .opacity(isCapturing ? 0.6 : 1.0)
+        .overlay {
+            if isCapturing {
+                ProgressView()
+                    .controlSize(.large)
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: isCapturing)
     }
 }
 

@@ -1,67 +1,61 @@
 import SwiftUI
 import AVFoundation
-#if os(iOS)
+
+#if canImport(UIKit)
 import UIKit
-#elseif os(macOS)
+typealias PlatformView = UIView
+typealias ViewRepresentable = UIViewRepresentable
+#elseif canImport(AppKit)
 import AppKit
+typealias PlatformView = NSView
+typealias ViewRepresentable = NSViewRepresentable
 #endif
 
-#if os(iOS)
-struct CameraPreview: UIViewRepresentable {
-    let session: AVCaptureSession
 
-    func makeUIView(context: Context) -> PreviewView {
-        let view = PreviewView()
-        view.videoPreviewLayer.session = session
-        view.videoPreviewLayer.videoGravity = .resizeAspectFill
-        return view
-    }
-
-    func updateUIView(_ uiView: PreviewView, context: Context) {
-        if uiView.videoPreviewLayer.session !== session {
-            uiView.videoPreviewLayer.session = session
-        }
-    }
-}
-
-final class PreviewView: UIView {
-    override class var layerClass: AnyClass {
-        AVCaptureVideoPreviewLayer.self
-    }
-
+/// A platform view whose backing layer is always an `AVCaptureVideoPreviewLayer`.
+final class PreviewView: PlatformView {
     var videoPreviewLayer: AVCaptureVideoPreviewLayer {
         layer as! AVCaptureVideoPreviewLayer
     }
-}
-#elseif os(macOS)
-struct CameraPreview: NSViewRepresentable {
-    let session: AVCaptureSession
 
-    func makeNSView(context: Context) -> PreviewView {
-        let view = PreviewView()
-        view.videoPreviewLayer.session = session
-        view.videoPreviewLayer.videoGravity = .resizeAspectFill
-        return view
-    }
-
-    func updateNSView(_ nsView: PreviewView, context: Context) {
-        if nsView.videoPreviewLayer.session !== session {
-            nsView.videoPreviewLayer.session = session
-        }
-    }
-}
-
-final class PreviewView: NSView {
-    let videoPreviewLayer = AVCaptureVideoPreviewLayer()
-
+    #if canImport(UIKit)
+    override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+    #elseif canImport(AppKit)
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer = videoPreviewLayer
+        layer = AVCaptureVideoPreviewLayer()
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
+    #endif
 }
-#endif
+
+
+
+struct CameraPreview: ViewRepresentable {
+    let session: AVCaptureSession
+
+    private func makeView() -> PreviewView {
+        let view = PreviewView()
+        view.videoPreviewLayer.session = session
+        view.videoPreviewLayer.videoGravity = .resizeAspectFill
+        return view
+    }
+
+    private func updateView(_ view: PreviewView) {
+        if view.videoPreviewLayer.session !== session {
+            view.videoPreviewLayer.session = session
+        }
+    }
+
+    #if canImport(UIKit)
+    func makeUIView(context: Context) -> PreviewView { makeView() }
+    func updateUIView(_ uiView: PreviewView, context: Context) { updateView(uiView) }
+    #elseif canImport(AppKit)
+    func makeNSView(context: Context) -> PreviewView { makeView() }
+    func updateNSView(_ nsView: PreviewView, context: Context) { updateView(nsView) }
+    #endif
+}

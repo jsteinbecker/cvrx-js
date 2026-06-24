@@ -15,8 +15,13 @@ struct OrderGeneratorButton: View {
     @Environment(\.modelContext) private var modelContext
 
     var body: some View {
-        Button("Generate New Order") {
+        Button {
             MockData.makeSampleOrders(into: modelContext, count: 1)
+        } label: {
+            Label("Order", systemImage: "plus")
         }
+        .padding()
+        .buttonStyle(PlainButtonStyle())
+        .font(.caption2)
     }
 }

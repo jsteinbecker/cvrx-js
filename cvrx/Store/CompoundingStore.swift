@@ -297,7 +297,7 @@ final class CompoundingStore {
         guard verifiedBy.role.canVerify else { return }
         guard let order = order(for: orderID) else { return }
 
-        let decision = approved ? "Approved" : "Rejected"
+        let decision = approved ? VerificationDecision.approved : .rejected
         order.verificationRecord = VerificationRecord(
             verifiedBy: verifiedBy,
             decision: decision,
@@ -309,7 +309,7 @@ final class CompoundingStore {
             actor: verifiedBy,
             action: .verificationPerformed(
                 orderID: orderID,
-                decision: decision,
+                decision: decision.rawValue,
                 rejectionReason: rejectionReason
             ),
             context: "Final verification after review of all scans, images, and overrides"

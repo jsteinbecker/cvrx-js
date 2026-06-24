@@ -17,8 +17,11 @@ enum MockData {
         User(username: "msm", deptId: "NCMC", name: "Molly Sweeney-McKeil", role: .rph)
     }
 
-    // MARK: - Sample order generation
-    //
+    static let patientNames = [
+        "Test Patient", "John Q. Patient", "Jane R. Doe", "Maria Gonzalez",
+        "Robert Chen", "Aisha Patel", "Liam O'Connor", "Sofia Rossi"
+    ]
+    
     // Picks from a catalog of clinically-coherent templates and randomizes the
     // order "envelope" (order number, patient, due time) plus per-lot data
     // (lot string, barcode, expiration). Recipe text and component makeup come
@@ -27,7 +30,6 @@ enum MockData {
     //
     // Pass a `seed` for deterministic output (SwiftUI previews, unit tests).
     // Leave it nil for fresh data on every launch.
-
     @MainActor
     @discardableResult
     static func makeSampleOrders(into: ModelContext ,count: Int = 6, seed: UInt64? = nil) -> [CompoundOrder] {
@@ -298,10 +300,6 @@ private extension MockData {
 
 private extension MockData {
 
-    static let patientNames = [
-        "Test Patient", "John Q. Patient", "Jane R. Doe", "Maria Gonzalez",
-        "Robert Chen", "Aisha Patel", "Liam O'Connor", "Sofia Rossi"
-    ]
 
     static let floors = ["3W", "4SW4", "5E", "2N", "ICU", "CVU", "6S"]
 
@@ -398,11 +396,11 @@ extension MockData {
 
         let floorTypes: [FloorType] = [.ms, .pc, .ic, .ob, .op]
         let floorNames: [FloorType: String] = [
-            .ms: "Med/Surg",
-            .pc: "Progressive Care",
-            .ic: "ICU",
-            .ob: "Obstetrics",
-            .op: "Outpatient"
+            .ms: "3W1",
+            .pc: "4SW4",
+            .ic: "CCU1",
+            .ob: "4SW1",
+            .op: "OPINF"
         ]
 
         for i in 0..<floors {

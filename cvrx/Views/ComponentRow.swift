@@ -65,7 +65,7 @@ struct ComponentRow: View {
     @State private var lotPendingRemoval: CompoundUtilizedLot?
     @FocusState private var focus: Cell?
     @State private var highlightedIndex: Int? = nil
-    @State private var dataIsIncomplete = false
+    @State private var dataIsIncomplete = true
 
     static let quantityTolerance = 0.001
 
@@ -120,7 +120,6 @@ struct ComponentRow: View {
             guard !didInit else { return }
             didInit = true
             if canMutate && component.utilizedLots.isEmpty {
-                isEditing = true
                 addDraft()
             }
         }
@@ -191,6 +190,7 @@ struct ComponentRow: View {
             set: { newValue in
                 if let i = self.drafts.firstIndex(where: { $0.id == id }) {
                     self.drafts[i] = newValue
+                    
                 }
             }
         )
@@ -247,7 +247,6 @@ struct ComponentRow: View {
             .gridColumnAlignment(.leading)
     }
 
-    // Committed lot — read-only; removable while editing.
     private func committedRow(_ lot: CompoundUtilizedLot) -> some View {
         GridRow(alignment: .center) {
             HStack(spacing: 6) {
@@ -280,10 +279,6 @@ struct ComponentRow: View {
         }
     }
 
-    // Editable draft — exactly one GridRow so the grid's shape stays fixed.
-    // Warnings render below the grid (see `draftWarnings`): a full-width
-    // spanning GridRow crashes Grid layout when a committed row is inserted
-    // in the same update pass (e.g. on "Done").
     private func draftRow(_ draft: Binding<DraftLotEntry>) -> some View {
         let entry = draft.wrappedValue
 

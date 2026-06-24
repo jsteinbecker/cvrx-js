@@ -1,233 +1,371 @@
 import SwiftUI
 
-/// Order detail. Hand-laid-out tiled layout — not a Form — so each section has a
-/// natural card boundary and the hierarchy is dictated by size/weight/color
-/// rather than uniform list rows. The capture action lives *inside* the current
-/// step card, which is where the user is mentally focused when they want to
-/// take a picture.
+
 struct OrderDetailScene: View {
-    @Environment(\.currentUser) var user
-    var order: CompoundOrder
+    @Environment(\.currentUser) private var currentUser
+    @Environment(\.dismiss) private var dismiss
+
+    let order: CompoundOrder
     let store: CompoundingStore
 
-    @State private var showMissingComponentOverride = false
-    @State private var overrideReason = ""
-    @State private var navigateToCompounding = false
-    @State private var showFinishConfirm = false
-    @State private var showRemediationDetail = false
+    @State private var isSendConfirmationPresented = false
+    @State private var isRemediationDetailPresented = false
+    @State private var selectedCapture: CompoundCapture?
+    @State private var dataEntryComplete: Bool = false
 
-    @State private var captureViewer: CompoundCapture?
-
-    @Environment(\.dismiss) private var dismiss
+    private enum Layout {
+        static let pagePadding: CGFloat = 16
+        static let cardSpacing: CGFloat = 14
+    }
+    
+    private func checkDataEntryCompleteness() {
+        var dataEntryMissing = false
+        order.components.forEach { cpt in
+            if (cpt.isFulfilled() == false) {
+                dataEntryMissing = true
+            }
+        }
+        let result = dataEntryMissing == true ? false : true
+        dataEntryComplete = result
+    }
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: Layout.cardSpacing) {
                 HeroCard(order: order)
-
-                if order.status == .remediation, let remediation = order.remediation {
-                    RemediationBanner(
-                        remediation: remediation,
-                        onResubmit: {
-                            store.resubmitAfterRemediation(orderID: order.id)
-                        },
-                        onShowDetail: { showRemediationDetail = true }
-                    )
-                }
+                    .padding(2)
+                remediationSection
 
                 ComponentsCard(
                     order: order,
-                    onAddLot: { component, lot in
-                        if let barcodeValue = lot.barcodeValue {
-                            store.processBarcodeScan(
-                                orderID: order.id,
-                                componentID: component.id,
-                                scannedBarcode: barcodeValue,
-                                detectedLot: lot.lot,
-                                detectedExpiration: lot.expiration,
-                                quantity: lot.strengthQuantity,
-                                scannedBy: user!
-                            )
-                        } else {
-                            store.addLotManually(
-                                orderID: order.id,
-                                componentID: component.id,
-                                lot: lot.lot,
-                                expiration: lot.expiration,
-                                mfg: lot.mfg,
-                                quantity: lot.strengthQuantity,
-                                enteredBy: user!
-                            )
-                        }
-                    },
-                    onRemoveLot: { component, lot in
-                        store.removeLot(
-                            orderID: order.id,
-                            componentID: component.id,
-                            lotID: lot.id
-                        )
-                    }
-                )
+                    onAddLot: addLot,
+                    onRemoveLot: removeLot
+                ).padding(2)
 
                 CurrentStepCard(
                     order: order,
-                    onPrev: { store.previousStep(orderID: order.id) },
-                    onNext: { store.advanceStep(orderID: order.id) },
-                    onCapture: handleCaptureTap
-                )
+                    store: store
+                ).padding(2)
 
-                if !order.captures.isEmpty {
-                    AllReferencesCard(
-                        captures: order.captures,
-                        order: order,
-                        onSelectCapture: { capture in
-                            captureViewer = capture
-                        }
-                    )
-                }
+                capturesSection
 
                 RecipeCard(
                     order: order,
-                    onSelectStep: { idx in store.setCurrentStep(orderID: order.id, stepIndex: idx) }
-                )
+                    onSelectStep: selectStep
+                ).padding(2)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 16)
         }
+        .scrollDismissesKeyboard(.automatic)
+        .padding(Layout.pagePadding)
         .background(Color.rxGroupedBackground.ignoresSafeArea())
         .navigationTitle(order.orderNumber)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .safeAreaInset(edge: .bottom) {
-            BottomActionBar(order: order, onSend: { showFinishConfirm = true })
+            BottomActionBar(
+                order: order,
+                onSend: presentSendConfirmation
+            )
         }
-        .alert("Missing Component Override", isPresented: $showMissingComponentOverride) {
-            TextField("Reason", text: $overrideReason, axis: .vertical)
-
-            Button("Cancel", role: .cancel) {
-                overrideReason = ""
-            }
-
-            Button("Override and Continue") {
-                navigateToCompounding = true
-            }
-            .disabled(overrideReason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        } message: {
-            Text("The following components are not yet fulfilled: \(order.unfulfilledComponents.map(\.product.name).joined(separator: ", ")). Enter a reason to continue.")
-        }
-        .alert("Send to Verification?", isPresented: $showFinishConfirm) {
+        .alert(
+            "Send to Verification?",
+            isPresented: $isSendConfirmationPresented
+        ) {
             Button("Cancel", role: .cancel) {}
+
             Button("Send") {
-                store.markReadyForVerification(orderID: order.id)
-                dismiss()
-            }
+                sendToVerification()
+            }.disabled(dataEntryComplete == false)
+            
         } message: {
-            Text("This compound will appear in the Verification queue. You won't capture any more images for it from here.")
+            Text(
+                """
+                This compound will appear in the Verification queue. \
+                You won't capture any more images for it from here.
+                """
+            )
         }
-        .sheet(isPresented: $showRemediationDetail) {
-            if let remediation = order.remediation {
-                RemediationDetailSheet(remediation: remediation, captures: order.captures)
-                    .presentationDetents([.medium, .large])
-            }
+        .sheet(isPresented: $isRemediationDetailPresented) {
+            remediationDetailSheet
         }
-        .sheet(item: $captureViewer) { capture in
+        .sheet(item: $selectedCapture) { capture in
             CaptureViewerSheet(
                 capture: capture,
                 badge: order.badge(for: capture),
                 canDelete: order.captureMutationsAllowed,
                 onDelete: {
-                    store.deleteCapture(orderID: order.id, captureID: capture.id)
-                    captureViewer = nil
+                    deleteCapture(capture)
                 }
             )
         }
-        .navigationDestination(isPresented: $navigateToCompounding) {
-            CompoundingScene(
-                order: order,
-                store: store
+    }
+
+    @ViewBuilder
+    private var remediationSection: some View {
+        if order.status == .remediation,
+           let remediation = order.remediation {
+            RemediationBanner(
+                remediation: remediation,
+                onResubmit: resubmitAfterRemediation,
+                onShowDetail: {
+                    isRemediationDetailPresented = true
+                }
             )
         }
     }
 
-    private func handleCaptureTap() {
-        if order.allComponentsFulfilled {
-            navigateToCompounding = true
-        } else {
-            showMissingComponentOverride = true
+    @ViewBuilder
+    private var capturesSection: some View {
+        if !order.captures.isEmpty {
+            AllImagesCard(
+                captures: order.captures,
+                order: order,
+                onSelectCapture: {
+                    selectedCapture = $0
+                }
+            )
         }
+    }
+
+    @ViewBuilder
+    private var remediationDetailSheet: some View {
+        if let remediation = order.remediation {
+            RemediationDetailSheet(
+                remediation: remediation,
+                captures: order.captures
+            )
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    private func addLot(
+        component: CompoundComponent,
+        lot: CompoundUtilizedLot
+    ) {
+        guard let currentUser else {
+            assertionFailure("A signed-in user is required to add a lot.")
+            return
+        }
+
+        if let barcodeValue = lot.barcodeValue {
+            store.processBarcodeScan(
+                orderID: order.id,
+                componentID: component.id,
+                scannedBarcode: barcodeValue,
+                detectedLot: lot.lot,
+                detectedExpiration: lot.expiration,
+                quantity: lot.strengthQuantity,
+                scannedBy: currentUser
+            )
+        } else {
+            store.addLotManually(
+                orderID: order.id,
+                componentID: component.id,
+                lot: lot.lot,
+                expiration: lot.expiration,
+                mfg: lot.mfg,
+                quantity: lot.strengthQuantity,
+                enteredBy: currentUser
+            )
+        }
+    }
+
+    private func removeLot(
+        component: CompoundComponent,
+        lot: CompoundUtilizedLot
+    ) {
+        store.removeLot(
+            orderID: order.id,
+            componentID: component.id,
+            lotID: lot.id
+        )
+    }
+
+    private func selectStep(_ index: Int) {
+        guard order.recipeSteps.indices.contains(index) else {
+            return
+        }
+
+        store.setCurrentStep(
+            orderID: order.id,
+            stepIndex: index
+        )
+    }
+
+    private func presentSendConfirmation() {
+        guard order.captureMutationsAllowed,
+              !order.captures.isEmpty else {
+            return
+        }
+
+        isSendConfirmationPresented = true
+    }
+
+    private func sendToVerification() {
+        store.markReadyForVerification(orderID: order.id)
+        dismiss()
+    }
+
+    private func resubmitAfterRemediation() {
+        store.resubmitAfterRemediation(orderID: order.id)
+    }
+
+    private func deleteCapture(_ capture: CompoundCapture) {
+        store.deleteCapture(
+            orderID: order.id,
+            captureID: capture.id
+        )
+
+        selectedCapture = nil
     }
 }
 
-// MARK: - Hero card
 
-/// Top hero: medication name is the loudest element, then the patient, then
-/// inline meta (due / route / container). Status pill anchored to the top-right.
+// MARK: - Hero
+
 struct HeroCard: View {
     let order: CompoundOrder
 
     var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .trailing, spacing: 6) {
-                Text(order.orderNumber)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .tracking(0.4)
-                Divider()
-                MetaPill(systemImage: "clock", text: dueText, tone: dueTone)
-                StatusPill(status: order.status)
-            }
+        HStack(spacing: 0) {
+            statusRail
 
-            VStack(alignment: .leading, spacing: 12) {
-                Text(order.medicationName)
-                    .font(.title2.weight(.bold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(3)
-            HStack {
-                finalContainerIcon(kind: order.finalContainer)
+            VStack(alignment: .leading, spacing: 16) {
+                header
+                medicationSection
+
+                Divider()
+
+                patientSection
+                metadataSection
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .cardSurface()
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius: CardStyle.cornerRadius,
+                style: .continuous
+            )
+        )
+    }
+
+    private var statusRail: some View {
+        statusColor
+            .frame(width: 5)
+    }
+
+    private var header: some View {
+        HStack {
+            Text(order.orderNumber)
+                .font(.footnote.weight(.semibold).monospaced())
+                .foregroundStyle(.secondary)
+                .tracking(0.5)
+
+            Spacer()
+
+            StatusPill(status: order.status)
+        }
+    }
+
+    private var medicationSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(order.medicationName)
+                .font(.title.weight(.bold))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Label {
                 Text(order.finalContainer)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                }
-            }
-
-            Divider()
-
-            // Patient — second most prominent thing.
-            VStack(alignment: .leading, spacing: 6) {
-                Text("PATIENT")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .tracking(0.5)
-                Text(order.patient.name)
-                    .font(.title3.weight(.semibold))
-                Text("\(order.patient.floor) \(order.patient.room)")
-                Divider().frame(height: 16).padding(.horizontal, 10)
-                MetaPill(
-                    systemImage: finalCntrIconName(kind: order.finalContainer),
-                    text: order.route
-                )
+            } icon: {
+                finalContainerIcon(kind: order.finalContainer)
             }
         }
-        .padding(18)
-        .cardSurface()
+    }
+
+    private var patientSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("PATIENT")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
+                .tracking(0.6)
+
+            Text(order.patient.name)
+                .font(.title3.weight(.semibold))
+
+            Text(patientLocation)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var metadataSection: some View {
+        HStack(spacing: 16) {
+            MetaPill(
+                systemImage: "clock",
+                text: dueText,
+                tone: dueTone
+            )
+
+            MetaPill(
+                systemImage: finalCntrIconName(
+                    kind: order.finalContainer
+                ),
+                text: order.route
+            )
+        }
+    }
+
+    private var patientLocation: String {
+        [order.patient.floor, order.patient.room]
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+    }
+
+    private var statusColor: Color {
+        switch order.status {
+        case .remediation:
+            return .purple
+
+        case .waitingForApproval:
+            return .orange
+
+        case .approved:
+            return .green
+
+        case .rejected:
+            return .red
+
+        default:
+            return .accentColor
+        }
     }
 
     private var dueText: String {
-        let interval = order.dueTime.timeIntervalSinceNow
-        if interval < 0 {
+        if order.dueTime <= .now {
             return "Overdue"
         }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return "Due " + formatter.localizedString(for: order.dueTime, relativeTo: .now)
+
+        return "Due \(RelativeDateFormatter.abbreviated.string(for: order.dueTime))"
     }
 
     private var dueTone: Color {
-        let interval = order.dueTime.timeIntervalSinceNow
-        if interval < 0 { return .red }
-        if interval < 30 * 60 { return .orange }
-        return .secondary
+        let remainingTime = order.dueTime.timeIntervalSinceNow
+
+        switch remainingTime {
+        case ..<0:
+            return .red
+
+        case ..<(30 * 60):
+            return .orange
+
+        default:
+            return .secondary
+        }
     }
 }
 
@@ -248,7 +386,8 @@ struct MetaPill: View {
     }
 }
 
-// MARK: - Remediation banner
+
+// MARK: - Remediation
 
 struct RemediationBanner: View {
     let remediation: RemediationRequest
@@ -256,68 +395,116 @@ struct RemediationBanner: View {
     let onShowDetail: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.title3)
-                    .foregroundStyle(.purple)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Remediation Requested")
-                        .font(.headline)
-                    Text(requestedText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            header
 
             Text(remediation.reason)
                 .font(.callout)
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if !remediation.flaggedCaptureIDs.isEmpty {
-                Label("\(remediation.flaggedCaptureIDs.count) image\(remediation.flaggedCaptureIDs.count == 1 ? "" : "s") flagged",
-                      systemImage: "flag.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.purple)
-            }
+            flaggedImageLabel
 
-            HStack(spacing: 10) {
-                Button("View Details", action: onShowDetail)
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                Spacer()
-                Button {
-                    onResubmit()
-                } label: {
-                    Label("Resubmit", systemImage: "paperplane.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .tint(.purple)
-            }
+            actions
         }
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.purple.opacity(0.08))
-                .shadow(color: .black.opacity(0.09), radius: 8, x: 0, y: 2)
+        .background(remediationBackground)
+        .overlay(remediationBorder)
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.title3)
+                .foregroundStyle(.purple)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Remediation Requested")
+                    .font(.headline)
+
+                Text(requestedText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private var flaggedImageLabel: some View {
+        if !remediation.flaggedCaptureIDs.isEmpty {
+            Label(
+                flaggedImageText,
+                systemImage: "flag.fill"
+            )
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.purple)
+        }
+    }
+
+    private var actions: some View {
+        HStack(spacing: 10) {
+            Button(
+                "View Details",
+                action: onShowDetail
+            )
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+            Spacer()
+
+            Button(action: onResubmit) {
+                Label(
+                    "Resubmit",
+                    systemImage: "paperplane.fill"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .tint(.purple)
+        }
+    }
+
+    private var remediationBackground: some View {
+        RoundedRectangle(
+            cornerRadius: CardStyle.cornerRadius,
+            style: .continuous
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.purple.opacity(0.45), lineWidth: 1)
+        .fill(Color.purple.opacity(0.08))
+        .shadow(
+            color: CardStyle.shadowColor,
+            radius: CardStyle.shadowRadius,
+            x: 0,
+            y: CardStyle.shadowYOffset
+        )
+    }
+
+    private var remediationBorder: some View {
+        RoundedRectangle(
+            cornerRadius: CardStyle.cornerRadius,
+            style: .continuous
+        )
+        .strokeBorder(
+            Color.purple.opacity(0.45),
+            lineWidth: 1
         )
     }
 
     private var requestedText: String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: remediation.requestedAt, relativeTo: .now)
+        RelativeDateFormatter.abbreviated.string(
+            for: remediation.requestedAt
+        )
+    }
+
+    private var flaggedImageText: String {
+        let count = remediation.flaggedCaptureIDs.count
+        return "\(count) image\(count == 1 ? "" : "s") flagged"
     }
 }
 
-// MARK: - Components card
+
+// MARK: - Components
 
 struct ComponentsCard: View {
     let order: CompoundOrder
@@ -326,153 +513,261 @@ struct ComponentsCard: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            CardHeader(
-                title: "Components",
-                trailing: AnyView(
-                    Text("\(order.fulfilledComponentCount)/\(order.components.count)")
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(order.allComponentsFulfilled ? .green : .orange)
-                )
-            )
-
-            ProgressView(
-                value: Double(order.fulfilledComponentCount),
-                total: Double(max(order.components.count, 1))
-            )
-            .tint(order.allComponentsFulfilled ? .green : .orange)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 4)
-
-            VStack(spacing: 0) {
-                ForEach(Array(order.components.enumerated()), id: \.element.id) { idx, component in
-                    if idx > 0 { Divider().padding(.leading, 16) }
-                    ComponentRow(
-                        component: component,
-                        canMutate: order.captureMutationsAllowed,
-                        onAddLot: { lot in onAddLot(component, lot) },
-                        onRemoveLot: { lot in onRemoveLot(component, lot) }
-                    )
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                }
+            CardHeader("Components") {
+                fulfillmentCount
             }
 
-            if !order.allComponentsFulfilled {
-                Text("\(order.unfulfilledComponents.count) component\(order.unfulfilledComponents.count == 1 ? "" : "s") not yet fulfilled. Continuing to capture requires an override.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 6)
-                    .padding(.bottom, 12)
-            } else {
-                Spacer().frame(height: 8)
-            }
+            fulfillmentProgress
+            componentsList
+            fulfillmentFooter
         }
         .cardSurface()
     }
+
+    private var fulfillmentCount: some View {
+        Text("\(order.fulfilledComponentCount)/\(order.components.count)")
+            .font(.subheadline.weight(.semibold).monospacedDigit())
+            .foregroundStyle(fulfillmentColor)
+    }
+
+    private var fulfillmentProgress: some View {
+        ProgressView(
+            value: Double(order.fulfilledComponentCount),
+            total: Double(max(order.components.count, 1))
+        )
+        .tint(fulfillmentColor)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+
+    private var componentsList: some View {
+        VStack(spacing: 0) {
+            ForEach(
+                Array(order.components.enumerated()),
+                id: \.element.id
+            ) { index, component in
+                if index > 0 {
+                    Divider()
+                        .padding(.leading, 16)
+                }
+
+                ComponentRow(
+                    component: component,
+                    canMutate: order.captureMutationsAllowed,
+                    onAddLot: {
+                        onAddLot(component, $0)
+                    },
+                    onRemoveLot: {
+                        onRemoveLot(component, $0)
+                    }
+                )
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var fulfillmentFooter: some View {
+        if order.allComponentsFulfilled {
+            Spacer()
+                .frame(height: 10)
+        } else {
+            Text(unfulfilledText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 14)
+        }
+    }
+
+    private var fulfillmentColor: Color {
+        order.allComponentsFulfilled ? .green : .orange
+    }
+
+    private var unfulfilledText: String {
+        let count = order.unfulfilledComponents.count
+        return "\(count) component\(count == 1 ? "" : "s") not yet fulfilled."
+    }
 }
 
-// MARK: - Current step card (with inline Capture)
+
+// MARK: - Current step
 
 struct CurrentStepCard: View {
     let order: CompoundOrder
-    let onPrev: () -> Void
-    let onNext: () -> Void
-    let onCapture: () -> Void
+    let store: CompoundingStore
+
+    @State private var isCompoundingPresented = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            // Header row.
-            HStack {
-                Text(order.totalStepCount > 0
-                     ? "STEP \(order.currentStepNumber) OF \(order.totalStepCount)"
-                     : "STEP")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Color.accentColor)
-                    .tracking(0.6)
-                Spacer()
-                HStack(spacing: 6) {
-                    Button(action: onPrev) {
-                        Image(systemName: "chevron.left")
-                            .frame(width: 32, height: 32)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(order.currentStepIndex <= 0)
-
-                    Button(action: onNext) {
-                        Image(systemName: "chevron.right")
-                            .frame(width: 32, height: 32)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(order.currentStepIndex >= max(order.totalStepCount - 1, 0))
-                }
-            }
-
-            // Step text — the focal point of this card.
-            Text(order.currentStepText.isEmpty ? "—" : order.currentStepText)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            // Capture button — large, in the natural place (right where the
-            // user is reading the step). Captures aren't tied to a step;
-            // this is just a convenient inline shortcut to the camera.
-            Button(action: onCapture) {
-                Label("Capture", systemImage: "camera.fill")
-                    .font(.headline)
-                    .frame(maxWidth: 32)
-                    .padding(.vertical, 6)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+        VStack(alignment: .leading, spacing: 16) {
+            stepHeader
+            stepDescription
+            captureButton
         }
         .padding(16)
         .cardSurface()
+        .navigationDestination(
+            isPresented: $isCompoundingPresented
+        ) {
+            CompoundingScene(
+                order: order,
+                store: store
+            )
+        }
+    }
+
+    private var stepHeader: some View {
+        HStack {
+            Text(stepTitle)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(Color.accentColor)
+                .tracking(0.6)
+
+            Spacer()
+
+            stepControls
+        }
+    }
+
+    private var stepControls: some View {
+        HStack(spacing: 8) {
+            Button(action: goToPreviousStep) {
+                Image(systemName: "chevron.left")
+                    .frame(width: 32, height: 32)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!canGoBackward)
+
+            Button(action: goToNextStep) {
+                Image(systemName: "chevron.right")
+                    .frame(width: 32, height: 32)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!canGoForward)
+        }
+    }
+
+    private var stepDescription: some View {
+        Text(order.currentStepText.isEmpty ? "—" : order.currentStepText)
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var captureButton: some View {
+        Button(action: navigateToCompoundingScene) {
+            Label(
+                "Open",
+                systemImage: "camera.fill"
+            )
+            .font(.headline)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .disabled(!canOpenCompounding)
+    }
+
+    private var stepTitle: String {
+        guard order.totalStepCount > 0 else {
+            return "STEP"
+        }
+
+        return "STEP \(order.currentStepNumber) OF \(order.totalStepCount)"
+    }
+
+    private var canGoBackward: Bool {
+        order.currentStepIndex > 0
+    }
+
+    private var canGoForward: Bool {
+        order.currentStepIndex < order.totalStepCount - 1
+    }
+
+    private var canOpenCompounding: Bool {
+        order.captureMutationsAllowed &&
+        order.totalStepCount > 0
+    }
+
+    private func goToPreviousStep() {
+        guard canGoBackward else {
+            return
+        }
+
+        store.previousStep(orderID: order.id)
+    }
+
+    private func goToNextStep() {
+        guard canGoForward else {
+            return
+        }
+
+        store.advanceStep(orderID: order.id)
+    }
+
+    private func navigateToCompoundingScene() {
+        guard canOpenCompounding else {
+            return
+        }
+
+        isCompoundingPresented = true
     }
 }
 
-// MARK: - All references card
 
-struct AllReferencesCard: View {
+// MARK: - Images
+
+struct AllImagesCard: View {
     let captures: [CompoundCapture]
     let order: CompoundOrder
-    var onSelectCapture: ((CompoundCapture) -> Void)? = nil
+    var onSelectCapture: ((CompoundCapture) -> Void)?
 
     var body: some View {
         VStack(spacing: 12) {
-            CardHeader(
-                title: "All Images",
-                trailing: AnyView(
-                    Text("\(captures.count)")
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                )
-            )
+            CardHeader("Images") {
+                Text("\(captures.count)")
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
             ReferenceImageGrid(
                 captures: captures,
                 order: order,
                 onSelect: onSelectCapture
             )
             .padding(.horizontal, 16)
-            .padding(.bottom, 14)
 
-            if order.captureMutationsAllowed && !captures.isEmpty {
-                Text("Tap an image to view or delete.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 10)
-            }
+            interactionHint
+
+            Spacer()
+                .frame(height: 14)
         }
         .cardSurface()
     }
+
+    @ViewBuilder
+    private var interactionHint: some View {
+        if order.captureMutationsAllowed,
+           !captures.isEmpty {
+            Text("Tap an image to view or delete.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+        }
+    }
 }
 
-// MARK: - Recipe card
+
+// MARK: - Recipe
 
 struct RecipeCard: View {
     let order: CompoundOrder
@@ -480,43 +775,88 @@ struct RecipeCard: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            CardHeader(title: "Full Recipe", trailing: nil)
+            CardHeader("Full Recipe")
 
             VStack(spacing: 0) {
-                ForEach(Array(order.recipeSteps.enumerated()), id: \.offset) { idx, step in
-                    if idx > 0 { Divider().padding(.leading, 44) }
-                    Button {
-                        onSelectStep(idx)
-                    } label: {
-                        HStack(alignment: .top, spacing: 12) {
-                            ZStack {
-                                Circle()
-                                    .fill(idx == order.currentStepIndex
-                                          ? Color.accentColor
-                                          : Color.secondary.opacity(0.15))
-                                    .frame(width: 26, height: 26)
-                                Text("\(idx + 1)")
-                                    .font(.caption.weight(.bold).monospacedDigit())
-                                    .foregroundStyle(idx == order.currentStepIndex ? .white : .secondary)
-                            }
-                            Text(step)
-                                .font(.callout)
-                                .fontWeight(idx == order.currentStepIndex ? .semibold : .regular)
-                                .foregroundStyle(.primary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .contentShape(Rectangle())
+                ForEach(
+                    Array(order.recipeSteps.enumerated()),
+                    id: \.offset
+                ) { index, step in
+                    if index > 0 {
+                        Divider()
+                            .padding(.leading, 44)
                     }
-                    .buttonStyle(.plain)
+
+                    recipeStepButton(
+                        index: index,
+                        text: step
+                    )
                 }
             }
-            .padding(.bottom, 8)
+            .padding(.bottom, 10)
         }
         .cardSurface()
     }
+
+    private func recipeStepButton(
+        index: Int,
+        text: String
+    ) -> some View {
+        Button {
+            onSelectStep(index)
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                StepNumberBadge(
+                    number: index + 1,
+                    isCurrent: index == order.currentStepIndex
+                )
+
+                Text(text)
+                    .font(.callout)
+                    .fontWeight(
+                        index == order.currentStepIndex
+                            ? .semibold
+                            : .regular
+                    )
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
 }
+
+private struct StepNumberBadge: View {
+    let number: Int
+    let isCurrent: Bool
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(backgroundColor)
+                .frame(width: 26, height: 26)
+
+            Text("\(number)")
+                .font(.caption.weight(.bold).monospacedDigit())
+                .foregroundStyle(foregroundColor)
+        }
+    }
+
+    private var backgroundColor: Color {
+        isCurrent
+            ? .accentColor
+            : Color.secondary.opacity(0.15)
+    }
+
+    private var foregroundColor: Color {
+        isCurrent ? .white : .secondary
+    }
+}
+
 
 // MARK: - Bottom action bar
 
@@ -525,42 +865,86 @@ struct BottomActionBar: View {
     let onSend: () -> Void
 
     var body: some View {
-        if order.captures.isEmpty {
+        switch state {
+        case .hidden:
             EmptyView()
-        } else if order.status == .waitingForApproval {
-            HStack(spacing: 8) {
-                Image(systemName: "hourglass")
-                Text("In verification queue")
-                    .font(.subheadline.weight(.semibold))
-            }
-            .foregroundStyle(.orange)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .padding(.horizontal, 16)
-            .background(.bar)
-        } else if order.status == .approved || order.status == .rejected {
-            EmptyView()
-        } else {
-            Button(action: onSend) {
-                Label("Send to Verification", systemImage: "checkmark.seal.fill")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(.bar)
+
+        case .waiting:
+            waitingView
+
+        case .ready:
+            sendButton
         }
+    }
+
+    private var waitingView: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "hourglass")
+
+            Text("In verification queue")
+                .font(.subheadline.weight(.semibold))
+        }
+        .foregroundStyle(.orange)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .background(.bar)
+    }
+
+    private var sendButton: some View {
+        Button(action: onSend) {
+            Label(
+                "Send to Verification",
+                systemImage: "checkmark.seal.fill"
+            )
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.bar)
+    }
+
+    private var state: State {
+        guard !order.captures.isEmpty else {
+            return .hidden
+        }
+
+        switch order.status {
+        case .waitingForApproval:
+            return .waiting
+
+        case .approved, .rejected:
+            return .hidden
+
+        default:
+            return .ready
+        }
+    }
+
+    private enum State {
+        case hidden
+        case waiting
+        case ready
     }
 }
 
-// MARK: - Shared building blocks
 
-/// Standard header row used inside cards.
-struct CardHeader: View {
+// MARK: - Shared views
+
+struct CardHeader<Trailing: View>: View {
     let title: String
-    let trailing: AnyView?
+    private let trailing: Trailing
+
+    init(
+        _ title: String,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        self.title = title
+        self.trailing = trailing()
+    }
 
     var body: some View {
         HStack {
@@ -568,54 +952,110 @@ struct CardHeader: View {
                 .font(.subheadline.weight(.bold))
                 .foregroundStyle(.primary)
                 .tracking(0.2)
+
             Spacer()
-            if let trailing { trailing }
+
+            trailing
         }
         .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 10)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
     }
 }
 
-// Cross-platform grouped background colors. On macOS the system grouped colors
-// don't exist, so we approximate with window/content colors.
+extension CardHeader where Trailing == EmptyView {
+    init(_ title: String) {
+        self.init(title) {
+            EmptyView()
+        }
+    }
+}
+
+
+// MARK: - Formatting
+
+private enum RelativeDateFormatter {
+    static let abbreviated: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+}
+
+private extension RelativeDateTimeFormatter {
+    func string(for date: Date) -> String {
+        localizedString(
+            for: date,
+            relativeTo: .now
+        )
+    }
+}
+
+
+// MARK: - Styling
+
+private enum CardStyle {
+    static let cornerRadius: CGFloat = 16
+    static let shadowRadius: CGFloat = 8
+    static let shadowYOffset: CGFloat = 2
+    static let shadowColor = Color.black.opacity(0.09)
+    static let borderColor = Color.primary.opacity(0.08)
+}
+
 extension Color {
     static var rxGroupedBackground: Color {
         #if os(iOS)
-        return Color(.systemGroupedBackground)
+        Color(.systemGroupedBackground)
         #else
-        return Color(.windowBackgroundColor)
+        Color(.windowBackgroundColor)
         #endif
     }
 
     static var rxCardBackground: Color {
         #if os(iOS)
-        return Color(.secondarySystemGroupedBackground)
+        Color(.secondarySystemGroupedBackground)
         #else
-        return Color(.controlBackgroundColor)
+        Color(.controlBackgroundColor)
         #endif
     }
 }
 
-/// Card surface styling — applied with a modifier so every card matches.
-/// A subtle shadow lifts cards off the page background; pair that with a
-/// hairline border for definition in both light and dark mode.
 private struct CardSurface: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.rxCardBackground)
-                    .shadow(color: .black.opacity(0.09), radius: 8, x: 0, y: 2)
+            .frame(
+                maxWidth: .infinity,
+                alignment: .leading
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
-            )
+            .background {
+                RoundedRectangle(
+                    cornerRadius: CardStyle.cornerRadius,
+                    style: .continuous
+                )
+                .fill(Color.rxCardBackground)
+                .shadow(
+                    color: CardStyle.shadowColor,
+                    radius: CardStyle.shadowRadius,
+                    x: 0,
+                    y: CardStyle.shadowYOffset
+                )
+            }
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: CardStyle.cornerRadius,
+                    style: .continuous
+                )
+                .strokeBorder(
+                    CardStyle.borderColor,
+                    lineWidth: 0.5
+                )
+            }
     }
 }
 
 extension View {
-    func cardSurface() -> some View { modifier(CardSurface()) }
+    func cardSurface() -> some View {
+        modifier(CardSurface())
+    }
 }
+
