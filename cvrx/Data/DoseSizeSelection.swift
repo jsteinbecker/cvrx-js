@@ -30,7 +30,7 @@ enum DoseSizeSelectionError: Error {
     case invalidDose
     /// A candidate size's unit dimension doesn't match the ordered dose's
     /// dimension (e.g. trying to fill a mL order with a mg-only product).
-    case incompatibleUnits(Product)
+    case incompatibleUnits(productID: UUID, productName: String)
     /// No combination of the given sizes can reach or exceed the ordered dose
     /// within the search bound.
     case noAchievableCombination
@@ -76,7 +76,10 @@ enum DoseSizeSelector {
         var strengthsInOrderedUnit: [(product: Product, strength: Decimal)] = []
         for product in sizes {
             guard product.strengthUnit.dimension == orderedUnit.dimension else {
-                throw DoseSizeSelectionError.incompatibleUnits(product)
+                throw DoseSizeSelectionError.incompatibleUnits(
+                    productID: product.id,
+                    productName: product.name
+                )
             }
             let baseStrength = product.strength * product.strengthUnit.toBaseFactor
             let converted = baseStrength / orderedUnit.toBaseFactor
