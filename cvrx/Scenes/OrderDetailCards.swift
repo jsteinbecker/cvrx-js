@@ -430,8 +430,6 @@ struct AllImagesCard: View {
     }
 }
 
-// MARK: - Recipe
-
 struct RecipeCard: View {
     let order: CSPOrder
     let onSelectStep: (Int) -> Void
