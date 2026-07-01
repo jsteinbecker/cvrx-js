@@ -11,14 +11,22 @@ final class CompoundingStore {
     }
 
     private func seedIfNeeded() {
-        let descriptor = FetchDescriptor<CompoundOrder>()
+        let descriptor = FetchDescriptor<CSPOrder>()
         guard (try? modelContext.fetchCount(descriptor)) == 0 else { return }
         MockData.makeSampleOrders(into: modelContext)
         MockData.makeFacility(into: modelContext)
     }
 
-    private func order(for id: CompoundOrder.ID) -> CompoundOrder? {
-        var descriptor = FetchDescriptor<CompoundOrder>(
+    private func order(for id: CSPOrder.ID) -> CSPOrder? {
+        var descriptor = FetchDescriptor<CSPOrder>(
+            predicate: #Predicate { $0.id == id }
+        )
+        descriptor.fetchLimit = 1
+        return try? modelContext.fetch(descriptor).first
+    }
+    
+    private func flag(for id: CaptureFlag.ID) -> CaptureFlag? {
+        var descriptor = FetchDescriptor<CaptureFlag>(
             predicate: #Predicate { $0.id == id }
         )
         descriptor.fetchLimit = 1
@@ -28,11 +36,12 @@ final class CompoundingStore {
     // MARK: - Lot Entry
 
     func processBarcodeScan(
-        orderID: CompoundOrder.ID,
+        orderID: CSPOrder.ID,
         componentID: CompoundComponent.ID,
         scannedBarcode: String,
         detectedLot: String,
         detectedExpiration: Date?,
+        mfg: String? = nil,
         quantity: Double,
         scannedBy: User
     ) {
@@ -45,6 +54,7 @@ final class CompoundingStore {
             barcodeValue: scannedBarcode,
             lot: detectedLot,
             expiration: detectedExpiration,
+            mfg: mfg,
             strengthQuantity: quantity,
             scannedBy: scannedBy,
             scannedAt: Date.now
@@ -65,11 +75,11 @@ final class CompoundingStore {
             context: "Barcode scan via camera"
         ))
 
-        if order.status == .pending { order.status = .compounding }
+        if order.status == .pending { order.status = .staging }
     }
 
     func addLotManually(
-        orderID: CompoundOrder.ID,
+        orderID: CSPOrder.ID,
         componentID: CompoundComponent.ID,
         lot: String,
         expiration: Date?,
@@ -105,11 +115,11 @@ final class CompoundingStore {
             context: "Manual entry (barcode unavailable)"
         ))
 
-        if order.status == .pending { order.status = .compounding }
+        if order.status == .pending { order.status = .staging }
     }
 
     func correctScannedLotField(
-        orderID: CompoundOrder.ID,
+        orderID: CSPOrder.ID,
         componentID: CompoundComponent.ID,
         lotID: CompoundUtilizedLot.ID,
         field: String,
@@ -167,7 +177,7 @@ final class CompoundingStore {
     }
 
     func cosignLotCorrection(
-        orderID: CompoundOrder.ID,
+        orderID: CSPOrder.ID,
         componentID: CompoundComponent.ID,
         lotID: CompoundUtilizedLot.ID,
         overrideID: ScanOverride.ID,
@@ -198,7 +208,7 @@ final class CompoundingStore {
     }
 
     func removeLot(
-        orderID: CompoundOrder.ID,
+        orderID: CSPOrder.ID,
         componentID: CompoundComponent.ID,
         lotID: CompoundUtilizedLot.ID
     ) {
@@ -212,7 +222,7 @@ final class CompoundingStore {
     // MARK: - Captures
 
     func addCapture(
-        orderID: CompoundOrder.ID,
+        orderID: CSPOrder.ID,
         kind: CaptureKind,
         imageURL: URL?,
         capturedBy: User
@@ -221,6 +231,7 @@ final class CompoundingStore {
         guard let order = order(for: orderID) else { return }
 
         let capture = CompoundCapture(
+            cspOrder: order,
             kind: kind,
             capturedBy: capturedBy,
             timestamp: .now,
@@ -243,11 +254,11 @@ final class CompoundingStore {
             context: "Compounding documentation photograph"
         ))
 
-        if order.status == .pending { order.status = .compounding }
+        if order.status == .pending { order.status = .staging }
     }
 
     @discardableResult
-    func deleteCapture(orderID: CompoundOrder.ID, captureID: CompoundCapture.ID) -> Bool {
+    func deleteCapture(orderID: CSPOrder.ID, captureID: CompoundCapture.ID) -> Bool {
         guard let order = order(for: orderID) else { return false }
         guard order.captureMutationsAllowed else { return false }
 
@@ -260,36 +271,68 @@ final class CompoundingStore {
         return true
     }
 
-    // MARK: - Recipe Navigation
+    func addPreparerFlag(
+        orderID: CSPOrder.ID,
+        captureID: CompoundCapture.ID,
+        x: Double,
+        y: Double,
+        note: String?,
+        createdBy: User
+    ) {
+        guard let order = order(for: orderID),
+              let captureIndex = order.captures.firstIndex(where: { $0.id == captureID })
+        else { return }
 
-    func setCurrentStep(orderID: CompoundOrder.ID, stepIndex: Int) {
+        let flag = CaptureFlag(captureID: captureID, x: x, y: y, createdBy: createdBy, note: note)
+        order.captures[captureIndex].preparerFlags.append(flag)
+    }
+
+    func removePreparerFlag(
+        orderID: CSPOrder.ID,
+        captureID: CompoundCapture.ID,
+        flagID: CaptureFlag.ID
+    ) {
+        guard let order = order(for: orderID),
+              let captureIndex = order.captures.firstIndex(where: { $0.id == captureID })
+        else { return }
+
+        order.captures[captureIndex].preparerFlags.removeAll { $0.id == flagID }
+    }
+
+    func setCurrentStep(orderID: CSPOrder.ID, stepIndex: Int) {
         guard let order = order(for: orderID) else { return }
         let total = order.recipeSteps.count
         guard total > 0 else { return }
         order.currentStepIndex = min(max(stepIndex, 0), total - 1)
     }
 
-    func advanceStep(orderID: CompoundOrder.ID) {
+    func advanceStep(orderID: CSPOrder.ID) {
         guard let order = order(for: orderID) else { return }
         let total = order.recipeSteps.count
         guard total > 0 else { return }
         order.currentStepIndex = min(order.currentStepIndex + 1, total - 1)
     }
 
-    func previousStep(orderID: CompoundOrder.ID) {
+    func previousStep(orderID: CSPOrder.ID) {
         guard let order = order(for: orderID) else { return }
         order.currentStepIndex = max(order.currentStepIndex - 1, 0)
     }
 
+    func beginPreparing(orderID: CSPOrder.ID) {
+        guard let order = order(for: orderID) else { return }
+        guard [.pending, .staging].contains(order.status) else { return }
+        order.status = .preparing
+    }
+
     // MARK: - Verification
 
-    func markReadyForVerification(orderID: CompoundOrder.ID) {
+    func markReadyForVerification(orderID: CSPOrder.ID) {
         guard let order = order(for: orderID) else { return }
         order.status = .waitingForApproval
     }
 
     func verify(
-        orderID: CompoundOrder.ID,
+        orderID: CSPOrder.ID,
         verifiedBy: User,
         approved: Bool,
         rejectionReason: String? = nil
@@ -325,7 +368,7 @@ final class CompoundingStore {
     }
 
     func createRemediationRequest(
-        orderID: CompoundOrder.ID,
+        orderID: CSPOrder.ID,
         reason: String,
         requestedBy: User
     ) {
@@ -351,7 +394,7 @@ final class CompoundingStore {
     // MARK: - Remediation
 
     func captureRemediationImage(
-        orderID: CompoundOrder.ID,
+        orderID: CSPOrder.ID,
         imageURL: URL?,
         capturedBy: User,
         note: String? = nil
@@ -385,7 +428,7 @@ final class CompoundingStore {
     }
 
     func recordRemediationLotChange(
-        orderID: CompoundOrder.ID,
+        orderID: CSPOrder.ID,
         componentID: CompoundComponent.ID,
         lotID: CompoundUtilizedLot.ID,
         changeType: String,
@@ -410,7 +453,7 @@ final class CompoundingStore {
         order.remediation = remediation
     }
 
-    func completeRemediation(orderID: CompoundOrder.ID, completedBy: User) {
+    func completeRemediation(orderID: CSPOrder.ID, completedBy: User) {
         guard completedBy.role.canRemediate else { return }
         guard let order = order(for: orderID),
               let remediation = order.remediation
@@ -432,7 +475,7 @@ final class CompoundingStore {
         ))
     }
 
-    func resubmitAfterRemediation(orderID: CompoundOrder.ID) {
+    func resubmitAfterRemediation(orderID: CSPOrder.ID) {
         guard let order = order(for: orderID) else { return }
         order.status = .waitingForApproval
     }

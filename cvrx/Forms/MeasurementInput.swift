@@ -9,11 +9,11 @@ struct MeasurementInput: View {
     @State private var warningActive: Bool = false
 
     let unit: String
-    var placeholder: String = "0"
+    var name: String = ""
 
     var body: some View {
         HStack(spacing: 0) {
-            TextField(placeholder, text: $magnitudeText)
+            TextField(name, text: $magnitudeText)
                 .focused($isFocused)
                 .multilineTextAlignment(.trailing)
                 .padding(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 4))
@@ -54,4 +54,13 @@ struct MeasurementInput: View {
     func toggleWarning() {
         warningActive.toggle()
     }
+}
+
+
+#Preview {
+    MeasurementInput(
+        magnitudeText: .constant("150"),
+        unit: "mg",
+        name: "Fosaprepitant"
+    )
 }

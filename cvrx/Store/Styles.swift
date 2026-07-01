@@ -22,3 +22,11 @@ private struct DisabledGrayBorderedButtonStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed && isEnabled ? 0.97 : 1)
     }
 }
+
+
+extension Color {
+    static let forestGreen = Color(red: 0.13, green: 0.36, blue: 0.22)
+    static let aqua = Color(red: 0.00, green: 0.75, blue: 0.80)
+    static let lilac = Color(red: 0.78, green: 0.64, blue: 0.86)
+    static let crimson = Color(red: 0.86, green: 0.08, blue: 0.24)
+}

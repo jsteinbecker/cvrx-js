@@ -7,6 +7,7 @@ enum CameraError: LocalizedError {
     case cannotAddOutput
     case notConfigured
     case noPhotoData
+    case invalidImageData
 
     var errorDescription: String? {
         switch self {
@@ -22,6 +23,8 @@ enum CameraError: LocalizedError {
             "The camera session has not been configured."
         case .noPhotoData:
             "The camera returned no photo data."
+        case .invalidImageData:
+            "The selected image could not be processed."
         }
     }
 }

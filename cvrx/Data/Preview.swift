@@ -11,7 +11,7 @@ enum PreviewFixtures {
         do {
             return try ModelContainer(
                 for:
-                    CompoundOrder.self,
+                    CSPOrder.self,
                     Labeler.self,
                 configurations: configuration
             )

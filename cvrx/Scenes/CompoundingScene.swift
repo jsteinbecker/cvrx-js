@@ -1,17 +1,12 @@
 import SwiftUI
+import PhotosUI
+import UniformTypeIdentifiers
 #if canImport(UIKit)
 import UIKit
 #endif
 
-/// Live camera scene for capturing reference and auxiliary images.
-/// Focused purely on capture — verification is reached separately from the
-/// Verification tab. "Done" pops back to the order detail.
-///
-/// Capture flow: tapping a capture button takes the photo, and on success
-/// advances the recipe to the next step so the compounder can shoot the next
-/// one without leaving the camera. Failed captures do NOT advance the step.
 struct CompoundingScene: View {
-    var order: CompoundOrder
+    var order: CSPOrder
     @Environment(\.currentUser) var user
     let store: CompoundingStore
 
@@ -19,18 +14,23 @@ struct CompoundingScene: View {
     @State private var cameraErrorMessage: String?
     @State private var showRecipeSheet = false
     @State private var showGridSheet = false
+    @State private var showUploadSelector = false
 
-    // Capture-in-flight state. Prevents double-taps spawning parallel
-    // captures and lets us disable the controls + show activity.
+    // Upload flow state
+    @State private var uploadKindForPicker: CaptureKind = .reference
+    @State private var showPhotoPicker = false
+    @State private var pickedPhotoItem: PhotosPickerItem?
+    @State private var showFileImporter = false
+    @State private var isUploading = false
+    @State private var uploadErrorMessage: String?
+
     @State private var isCapturing = false
-    // Held so an in-flight capture is cancelled if the scene disappears.
     @State private var captureTask: Task<Void, Never>?
 
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ZStack {
-            // Camera fills the screen.
             CameraPreview(session: camera.session)
                 .ignoresSafeArea()
                 .overlay(alignment: .center) {
@@ -39,32 +39,36 @@ struct CompoundingScene: View {
                     }
                 }
 
-            // Foreground overlays.
             VStack(spacing: 0) {
-                // Top: current step pill.
                 CurrentStepPill(order: order)
                     .padding(.horizontal)
                     .padding(.top, 8)
 
                 Spacer()
 
-                // Reference grid strip (no names, no times). Hidden when empty.
                 if !order.captures.isEmpty {
                     InCameraReferenceGrid(captures: order.captures, order: order)
                         .padding(.horizontal, 12)
                         .padding(.bottom, 10)
                 }
 
-                // Bottom bar: capture controls.
                 CameraControlBar(
                     isCapturing: isCapturing,
                     onCaptureReference: { capture(.reference) },
                     onCaptureAux: { capture(.auxiliary) },
                     onRecipe: { showRecipeSheet = true },
-                    onGrid: { showGridSheet = true }
+                    onGrid: { showGridSheet = true },
+                    onUploadImage: { showUploadSelector = true }
                 )
                 .padding(.horizontal)
                 .padding(.bottom, 12)
+            }
+
+            if isUploading {
+                Color.black.opacity(0.35).ignoresSafeArea()
+                ProgressView("Uploading…")
+                    .padding(20)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
             }
         }
         .navigationTitle("Capture")
@@ -78,6 +82,7 @@ struct CompoundingScene: View {
             }
         }
         .task {
+            store.beginPreparing(orderID: order.id)
             do {
                 try await camera.configure()
                 camera.start()
@@ -97,21 +102,79 @@ struct CompoundingScene: View {
             CapturedGridSheet(
                 captures: order.captures,
                 order: order,
+                currentUser: user,
                 onDeleteCapture: { capture in
                     store.deleteCapture(orderID: order.id, captureID: capture.id)
+                },
+                onAddPreparerPin: { capture, x, y, note in
+                    store.addPreparerFlag(orderID: order.id, captureID: capture.id,
+                                          x: x, y: y, note: note, createdBy: user!)
+                },
+                onRemovePreparerPin: { capture, flag in
+                    store.removePreparerFlag(orderID: order.id, captureID: capture.id, flagID: flag.id)
                 }
             )
             .presentationDetents([.medium, .large])
         }
+        // MARK: Upload entry point — choose kind + source
+        .confirmationDialog(
+            "Upload Image",
+            isPresented: $showUploadSelector,
+            titleVisibility: .visible
+        ) {
+            Button("Reference — Camera Roll") {
+                uploadKindForPicker = .reference
+                showPhotoPicker = true
+            }
+            Button("Reference — Files") {
+                uploadKindForPicker = .reference
+                showFileImporter = true
+            }
+            Button("Aux — Camera Roll") {
+                uploadKindForPicker = .auxiliary
+                showPhotoPicker = true
+            }
+            Button("Aux — Files") {
+                uploadKindForPicker = .auxiliary
+                showFileImporter = true
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        // MARK: Camera Roll picker
+        .photosPicker(
+            isPresented: $showPhotoPicker,
+            selection: $pickedPhotoItem,
+            matching: .images,
+            photoLibrary: .shared()
+        )
+        .onChange(of: pickedPhotoItem) { _, newItem in
+            guard let newItem else { return }
+            handlePickedPhotoItem(newItem, kind: uploadKindForPicker)
+        }
+        // MARK: Finder / Files picker
+        .fileImporter(
+            isPresented: $showFileImporter,
+            allowedContentTypes: [.image, .jpeg, .png, .heic],
+            allowsMultipleSelection: false
+        ) { result in
+            handleFileImporterResult(result, kind: uploadKindForPicker)
+        }
+        .alert(
+            "Upload Failed",
+            isPresented: Binding(
+                get: { uploadErrorMessage != nil },
+                set: { if !$0 { uploadErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { uploadErrorMessage = nil }
+        } message: {
+            Text(uploadErrorMessage ?? "")
+        }
     }
 
-    // MARK: - Capture
+    // MARK: - Capture (unchanged)
 
-    /// Capture a photo of the given kind. On success, records the capture and
-    /// advances the recipe to the next step. On failure, records a no-image
-    /// capture (audit trail) and surfaces the error — without advancing.
     private func capture(_ kind: CaptureKind) {
-        // Ignore taps while a capture is already running.
         guard !isCapturing else { return }
         guard let user else {
             cameraErrorMessage = "No signed-in user — cannot record capture."
@@ -124,8 +187,6 @@ struct CompoundingScene: View {
 
             do {
                 let imageURL = try await camera.capturePhoto(orderID: order.id, kind: kind)
-
-                // Bail out cleanly if the scene went away mid-capture.
                 guard !Task.isCancelled else { return }
 
                 store.addCapture(
@@ -135,7 +196,6 @@ struct CompoundingScene: View {
                     capturedBy: user
                 )
 
-                // Advance the recipe only on a successful capture.
                 advanceStepAfterCapture(kind: kind)
                 captureFeedback(success: true)
             } catch {
@@ -153,14 +213,10 @@ struct CompoundingScene: View {
         }
     }
 
-    /// Advances to the next recipe step if one exists and this capture kind
-    /// should drive the recipe forward. Aux shots are supplementary, so by
-    /// default only reference captures advance the step — adjust if your
-    /// workflow wants aux to advance too.
     private func advanceStepAfterCapture(kind: CaptureKind) {
         guard kind == .reference else { return }
         let next = order.currentStepIndex + 1
-        guard next < order.totalStepCount else { return }   // already on last step
+        guard next < order.totalStepCount else { return }
         store.setCurrentStep(orderID: order.id, stepIndex: next)
     }
 
@@ -170,12 +226,120 @@ struct CompoundingScene: View {
         generator.notificationOccurred(success ? .success : .error)
         #endif
     }
+
+    // MARK: - Upload handling
+
+    /// Loads image data from a PhotosPicker selection, writes it to the same
+    /// on-disk location scheme the camera uses, and records it as a capture.
+    private func handlePickedPhotoItem(_ item: PhotosPickerItem, kind: CaptureKind) {
+        guard let user else {
+            uploadErrorMessage = "No signed-in user — cannot record upload."
+            pickedPhotoItem = nil
+            return
+        }
+
+        isUploading = true
+        Task {
+            defer {
+                isUploading = false
+                pickedPhotoItem = nil
+            }
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    throw UploadError.emptySelection
+                }
+                let imageURL = try await camera.saveImportedImage(
+                    data: data,
+                    orderID: order.id,
+                    kind: kind
+                )
+
+                store.addCapture(
+                    orderID: order.id,
+                    kind: kind,
+                    imageURL: imageURL,
+                    capturedBy: user
+                )
+                advanceStepAfterCapture(kind: kind)
+                captureFeedback(success: true)
+            } catch {
+                uploadErrorMessage = error.localizedDescription
+                store.addCapture(
+                    orderID: order.id,
+                    kind: kind,
+                    imageURL: nil,
+                    capturedBy: user
+                )
+                captureFeedback(success: false)
+            }
+        }
+    }
+
+    /// Handles a file picked from the Files/Finder importer. Requires
+    /// security-scoped resource access since the file may live outside the
+    /// app's sandbox (iCloud Drive, external volumes, etc).
+    private func handleFileImporterResult(_ result: Result<[URL], Error>, kind: CaptureKind) {
+        guard let user else {
+            uploadErrorMessage = "No signed-in user — cannot record upload."
+            return
+        }
+
+        switch result {
+        case .failure(let error):
+            uploadErrorMessage = error.localizedDescription
+        case .success(let urls):
+            guard let sourceURL = urls.first else { return }
+
+            isUploading = true
+            Task {
+                defer { isUploading = false }
+                do {
+                    let didAccess = sourceURL.startAccessingSecurityScopedResource()
+                    defer { if didAccess { sourceURL.stopAccessingSecurityScopedResource() } }
+
+                    let data = try Data(contentsOf: sourceURL)
+                    let imageURL = try await camera.saveImportedImage(
+                        data: data,
+                        orderID: order.id,
+                        kind: kind
+                    )
+
+                    store.addCapture(
+                        orderID: order.id,
+                        kind: kind,
+                        imageURL: imageURL,
+                        capturedBy: user
+                    )
+                    advanceStepAfterCapture(kind: kind)
+                    captureFeedback(success: true)
+                } catch {
+                    uploadErrorMessage = error.localizedDescription
+                    store.addCapture(
+                        orderID: order.id,
+                        kind: kind,
+                        imageURL: nil,
+                        capturedBy: user
+                    )
+                    captureFeedback(success: false)
+                }
+            }
+        }
+    }
+
+    private enum UploadError: LocalizedError {
+        case emptySelection
+        var errorDescription: String? {
+            switch self {
+            case .emptySelection: return "The selected photo couldn't be loaded."
+            }
+        }
+    }
 }
 
 // MARK: - Top "current step" pill
 
 struct CurrentStepPill: View {
-    let order: CompoundOrder
+    let order: CSPOrder
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -202,15 +366,11 @@ struct CurrentStepPill: View {
     }
 }
 
-// MARK: - In-camera reference grid (no names, no times)
+// MARK: - In-camera reference grid
 
-/// Compact horizontal grid of thumbnails shown over the live camera preview.
-/// Intentionally minimal: just the images, plus badge borders when a
-/// remediation is in progress so the compounder can see at a glance which
-/// captures are the new ones they're adding to fix the issue.
 struct InCameraReferenceGrid: View {
     let captures: [CompoundCapture]
-    let order: CompoundOrder
+    let order: CSPOrder
 
     private let thumbSize: CGFloat = 64
     private let spacing: CGFloat = 8
@@ -244,6 +404,7 @@ struct CameraControlBar: View {
     let onCaptureAux: () -> Void
     let onRecipe: () -> Void
     let onGrid: () -> Void
+    let onUploadImage: () -> Void
 
     var body: some View {
         HStack(spacing: 16) {
@@ -251,21 +412,17 @@ struct CameraControlBar: View {
                 .accessibilityLabel("Recipe steps")
                 .disabled(isCapturing)
 
-            CaptureButton(
-                title: "Reference",
-                systemImage: "camera.macro",
-                action: onCaptureReference
-            )
-            .frame(maxWidth: .infinity)
-            .disabled(isCapturing)
+            CircleIconButton(systemImage: "square.and.arrow.up", action: onUploadImage)
+                .accessibilityLabel("Upload image")
+                .disabled(isCapturing)
 
-            CaptureButton(
-                title: "Aux",
-                systemImage: "camera.filters",
-                action: onCaptureAux
-            )
-            .frame(maxWidth: .infinity)
-            .disabled(isCapturing)
+            CaptureButton( title: "Reference", systemImage: "camera.macro", action: onCaptureReference )
+                .frame(maxWidth: .infinity)
+                .disabled(isCapturing)
+
+            CaptureButton( title: "Aux", systemImage: "camera.filters", action: onCaptureAux )
+                .frame(maxWidth: .infinity)
+                .disabled(isCapturing)
 
             CircleIconButton(systemImage: "square.grid.2x2", action: onGrid)
                 .accessibilityLabel("Captured grid")
@@ -276,7 +433,6 @@ struct CameraControlBar: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(.ultraThinMaterial)
         )
-        // Dim + spinner overlay so a slow capture never reads as a frozen bar.
         .opacity(isCapturing ? 0.6 : 1.0)
         .overlay {
             if isCapturing {
@@ -306,7 +462,7 @@ struct CircleIconButton: View {
 // MARK: - Sheets
 
 struct RecipeStepsSheet: View {
-    let order: CompoundOrder
+    let order: CSPOrder
     let store: CompoundingStore
 
     @Environment(\.dismiss) private var dismiss
@@ -353,13 +509,13 @@ struct RecipeStepsSheet: View {
     }
 }
 
-/// Full-screen-grid variant of the captured images (still no names/times),
-/// for browsing within the camera scene. Tap a tile to view it large, with a
-/// delete option while the order can still be mutated.
 struct CapturedGridSheet: View {
     let captures: [CompoundCapture]
-    let order: CompoundOrder
+    let order: CSPOrder
+    var currentUser: User? = nil
     let onDeleteCapture: (CompoundCapture) -> Void
+    var onAddPreparerPin: ((CompoundCapture, Double, Double, String?) -> Void)? = nil
+    var onRemovePreparerPin: ((CompoundCapture, CaptureFlag) -> Void)? = nil
 
     @State private var viewer: CompoundCapture?
     @Environment(\.dismiss) private var dismiss
@@ -410,7 +566,14 @@ struct CapturedGridSheet: View {
                     onDelete: {
                         onDeleteCapture(capture)
                         viewer = nil
-                    }
+                    },
+                    currentUser: currentUser,
+                    onAddPreparerPin: order.captureMutationsAllowed ? { x, y, note in
+                        onAddPreparerPin?(capture, x, y, note)
+                    } : nil,
+                    onRemovePreparerPin: order.captureMutationsAllowed ? { flag in
+                        onRemovePreparerPin?(capture, flag)
+                    } : nil
                 )
             }
         }

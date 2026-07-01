@@ -32,20 +32,19 @@ enum MockData {
     // Leave it nil for fresh data on every launch.
     @MainActor
     @discardableResult
-    static func makeSampleOrders(into: ModelContext ,count: Int = 6, seed: UInt64? = nil) -> [CompoundOrder] {
+    static func makeSampleOrders(into: ModelContext ,count: Int = 6, seed: UInt64? = nil) -> [CSPOrder] {
         var rng = SeededGenerator(seed: seed ?? UInt64.random(in: .min ... .max))
 
         let builders = templateBuilders
         var pool: [@MainActor (inout SeededGenerator) -> CompoundSpec] = []
-        var orders: [CompoundOrder] = []
+        var orders: [CSPOrder] = []
         orders.reserveCapacity(count)
 
         for _ in 0..<count {
-            // Reshuffle when the pool empties so templates spread out before repeating.
             if pool.isEmpty { pool = builders.shuffled(using: &rng) }
             let spec = pool.removeLast()(&rng)
 
-            let newOrder = CompoundOrder(
+            let newOrder = CSPOrder(
                     orderNumber: randomOrderNumber(&rng),
                     patient: randomPatient(&rng),
                     medicationName: spec.medicationName,
@@ -125,6 +124,31 @@ private extension MockData {
             components: components
         )
     }
+    
+    static func daptomycinIVPush(_ rng: inout SeededGenerator) -> CompoundSpec {
+        let dose = [400, 450, 500, 550, 600, 700, 800, 900].randomElement(using: &rng)!
+
+        return CompoundSpec(
+            medicationName: "Daptomycin \(dose) mg IV Push",
+            finalContainer: "Syringe",
+            route: "IV Push",
+            recipeText: """
+            1. Confirm daptomycin vial strength(s) needed to prepare a \(dose) mg dose.
+            2. Reconstitute each vial with 0.9% Sodium Chloride Injection per institutional procedure — do NOT use dextrose-containing diluents (daptomycin is incompatible with dextrose).
+            3. Gently rotate the vial(s); allow to sit until fully dissolved. Avoid vigorous shaking/foaming.
+            4. Draw final \(dose) mg dose into syringe.
+            5. Cap, label, and photograph final syringe.
+            """,
+            components: [
+                CompoundComponent(
+                    product: daptomycinVial500mg(),
+                    totalQuantity: Double(dose),
+                    quantityUnit: .mg
+                ),
+                CompoundComponent(product: sodiumChlorideVial(), totalQuantity: 10, quantityUnit: .mL)
+            ]
+        )
+    }
 
     static func cefepimeIVPush(_ rng: inout SeededGenerator) -> CompoundSpec {
         CompoundSpec(
@@ -138,12 +162,7 @@ private extension MockData {
             4. Cap, label, and photograph final syringe.
             """,
             components: [
-                CompoundComponent(
-                    product: cefepimeVial2g(),
-                    totalQuantity: 2,
-                    quantityUnit: .g,
-                    utilizedLots: [utilizedLot(prefix: "CEF", strength: 2, &rng)]
-                ),
+                CompoundComponent(product: cefepimeVial2g(), totalQuantity: 2, quantityUnit: .g),
                 CompoundComponent(product: swfiVial(), totalQuantity: 10, quantityUnit: .mL)
             ]
         )
@@ -157,12 +176,7 @@ private extension MockData {
             route: "Continuous Infusion",
             recipeText: "",
             components: [
-                CompoundComponent(
-                    product: avycazVial2_5g(),
-                    totalQuantity: dose,
-                    quantityUnit: .g,
-                    utilizedLots: [utilizedLot(prefix: "99A", strength: dose, &rng)]
-                ),
+                CompoundComponent(product: avycazVial2_5g(), totalQuantity: dose, quantityUnit: .g),
                 CompoundComponent(product: nsBag(volume: 250), totalQuantity: 250, quantityUnit: .mL)
             ]
         )
@@ -180,12 +194,7 @@ private extension MockData {
             3. Introduce to the \(bagVolume) mL bag of 0.9% Sodium Chloride.
             """,
             components: [
-                CompoundComponent(
-                    product: zosynVial4_5g(),
-                    totalQuantity: 4.5,
-                    quantityUnit: .g,
-                    utilizedLots: [utilizedLot(prefix: "ZOS", strength: 4.5, &rng)]
-                ),
+                CompoundComponent(product: zosynVial4_5g(), totalQuantity: 4.5, quantityUnit: .g),
                 CompoundComponent(product: nsBag(volume: bagVolume),
                                   totalQuantity: Double(bagVolume),
                                   quantityUnit: .mL)
@@ -205,12 +214,7 @@ private extension MockData {
             3. Introduce to the \(bagVolume) mL bag of 0.9% Sodium Chloride.
             """,
             components: [
-                CompoundComponent(
-                    product: meropenemVial1g(),
-                    totalQuantity: 1,
-                    quantityUnit: .g,
-                    utilizedLots: [utilizedLot(prefix: "MER", strength: 1, &rng)]
-                ),
+                CompoundComponent(product: meropenemVial1g(), totalQuantity: 1, quantityUnit: .g),
                 CompoundComponent(product: swfiVial(), totalQuantity: 20, quantityUnit: .mL),
                 CompoundComponent(product: nsBag(volume: bagVolume),
                                   totalQuantity: Double(bagVolume),
@@ -229,12 +233,7 @@ private extension MockData {
             2. Cap, label, and photograph the final syringe.
             """,
             components: [
-                CompoundComponent(
-                    product: ondansetronVial4mg(),
-                    totalQuantity: 4,
-                    quantityUnit: .mg,
-                    utilizedLots: [utilizedLot(prefix: "OND", strength: 4, &rng)]
-                )
+                CompoundComponent(product: ondansetronVial4mg(), totalQuantity: 4, quantityUnit: .mg)
             ]
         )
     }
@@ -248,51 +247,71 @@ private extension MockData {
 // something else in your model.
 
 private extension MockData {
-
+    
+    static func sodiumChlorideVial() -> Product {
+        Product(name: "0.9% Sodium Chloride 20 mL vial", linkedNDCs: ["00000-1000-01"],
+                strength: 9, strengthUnit: .mg)
+    }
+    
+    static func daptomycinVial500mg() -> Product {
+        Product(name: "Daptomycin 500 mL vial", linkedNDCs: ["00000-2000-01"],
+                strength: 9, strengthUnit: .mg)
+    }
+    
     static func vancoVial1g() -> Product {
         Product(name: "Vancomycin 1 g vial", linkedNDCs: ["00000-0001-01"],
                 strength: 1, strengthUnit: .g)
     }
-
+    
     static func vancoVial500mg() -> Product {
         Product(name: "Vancomycin 500 mg vial", linkedNDCs: ["00000-0005-01"],
                 strength: 500, strengthUnit: .mg)
     }
-
+    
     static func cefepimeVial2g() -> Product {
         Product(name: "Cefepime 2 g vial", linkedNDCs: ["00000-0200-01"],
                 strength: 2, strengthUnit: .g)
     }
-
+    
     static func avycazVial2_5g() -> Product {
         Product(name: "Ceftazidime-Tazobactam 2.5g vial", linkedNDCs: ["00000-0201-01"],
                 strength: 2.5, strengthUnit: .g)
     }
-
+    
     static func zosynVial4_5g() -> Product {
         Product(name: "Piperacillin-Tazobactam 4.5 g vial", linkedNDCs: ["00000-0450-01"],
                 strength: 4.5, strengthUnit: .g)
     }
-
+    
     static func meropenemVial1g() -> Product {
         Product(name: "Meropenem 1 g vial", linkedNDCs: ["00000-0100-01"],
                 strength: 1, strengthUnit: .g)
     }
-
+    
     static func ondansetronVial4mg() -> Product {
         Product(name: "Ondansetron 4 mg/2 mL vial", linkedNDCs: ["00000-0040-02"],
                 strength: 4, strengthUnit: .mg, mlConcentration: 2)
     }
-
+    
     static func swfiVial() -> Product {
         Product(name: "Sterile Water for Injection 10 mL", linkedNDCs: ["00000-0010-10"],
                 strength: 10, strengthUnit: .mL, mlConcentration: 10)
     }
-
+    
     static func nsBag(volume: Int) -> Product {
         Product(name: "0.9% Sodium Chloride \(volume) mL bag",
                 linkedNDCs: [String(format: "00000-0%03d-10", volume)],
                 strength: 0.9, strengthUnit: .g, mlConcentration: 100)
+    }
+    
+    static func daptoVial500mg() -> Product {
+        Product(name: "Daptomycin 500 mg vial", linkedNDCs: ["00000-0050-01"],
+                strength: 500, strengthUnit: .mg, mlConcentration: 50)
+    }
+    
+    static func daptoVial350mg() -> Product {
+        Product(name: "Daptomycin 500 mg vial", linkedNDCs: ["00000-0050-01"],
+                strength: 350, strengthUnit: .mg, mlConcentration: 50)
     }
 }
 
@@ -405,7 +424,7 @@ extension MockData {
 
         for i in 0..<floors {
             let floorType = floorTypes[i % floorTypes.count]
-            let bedsPerRoom = max(1, avgBeds / 5 + Int.random(in: -1...1))
+            let bedsPerRoom = 2
 
             let floor = FloorUnit(
                 id: UUID(),

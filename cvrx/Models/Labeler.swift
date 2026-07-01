@@ -6,14 +6,16 @@ import SwiftData
 final class Labeler {
     var name: String
     var fullName: String
-    
+    var hidden: Bool = false
+
     @Attribute(.unique)
     var labelerCode: String
 
-    init(name: String, fullName: String, labelerCode: String) {
+    init(name: String, fullName: String, labelerCode: String, hidden: Bool = false) {
         self.name = name
         self.fullName = fullName
         self.labelerCode = labelerCode
+        self.hidden = hidden
     }
 }
 

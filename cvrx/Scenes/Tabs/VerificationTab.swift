@@ -4,9 +4,9 @@ import SwiftData
 struct VerificationTab: View {
     let store: CompoundingStore
     @Environment(\.currentUser) private var user
-    @Query(sort: \CompoundOrder.dueTime) private var orders: [CompoundOrder]
+    @Query(sort: \CSPOrder.dueTime) private var orders: [CSPOrder]
 
-    private var ordersReadyForVerification: [CompoundOrder] {
+    private var ordersReadyForVerification: [CSPOrder] {
         orders.filter { $0.status == .waitingForApproval }
     }
 
@@ -28,7 +28,7 @@ struct VerificationTab: View {
                 }
             }
             .navigationTitle("Verification Queue")
-            .navigationDestination(for: CompoundOrder.ID.self) { orderID in
+            .navigationDestination(for: CSPOrder.ID.self) { orderID in
                 if let order = orders.first(where: { $0.id == orderID }) {
                     VerifyScene(order: order, store: store)
                 } else {
@@ -51,7 +51,7 @@ struct VerificationTab: View {
 }
 
 struct VerifyQueueRow: View {
-    let order: CompoundOrder
+    let order: CSPOrder
 
     var body: some View {
         HStack(spacing: 12) {

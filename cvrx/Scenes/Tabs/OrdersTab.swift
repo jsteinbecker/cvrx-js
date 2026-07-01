@@ -6,15 +6,12 @@ import SwiftData
 struct OrdersTab: View {
     let store: CompoundingStore
 
-    @Environment(\.currentUser)
-    private var user
-    @State
-    private var selection: SidebarSelection? = .status(.pending)
-    @State
-    private var showingAddLabelersSheet = false
+    @Environment(\.currentUser) private var user
+    @State private var selection: SidebarSelection? = .status(.pending)
+    @State private var showingAddLabelersSheet = false
 
-    @Query(sort: \CompoundOrder.dueTime)
-    private var orders: [CompoundOrder]
+    @Query(sort: \CSPOrder.dueTime)
+    private var orders: [CSPOrder]
     
     private func count(for status: OrderStatusFilter) -> Int {
         orders.filter { status.matches($0) }.count   // swap in your real predicate
@@ -38,7 +35,7 @@ struct OrdersTab: View {
                 }
             }
             .navigationTitle("Orders")
-            .safeAreaInset(edge: .bottom, spacing: 2) {
+            .safeAreaInset(edge: .bottom, spacing: 4) {
                 VStack(spacing: 0) {
                     Divider()
                     ForEach(SidebarExtra.allCases) { extra in
@@ -86,21 +83,18 @@ struct OrdersTab: View {
             }
         } detail: {
             switch selection {
-            case .status(let status):
-                ordersDetail(for: status)
-            case .extra(.facility):
-                NavigationStack {
-                    FacilityOverviewScene()
-                }
-            case .extra(.labelers):
-                NavigationStack {
-                    LabelersScene()
-                }
-            case nil:
-                ContentUnavailableView(
-                    "Select a Category",
-                    systemImage: "sidebar.left"
-                )
+                case .status(let status):
+                    ordersDetail(for: status)
+                case .extra(.facility):
+                    NavigationStack { FacilityOverviewScene() }
+                case .extra(.labelers):
+                    NavigationStack { LabelersScene() }
+                case .extra(.productSearch):
+                    NavigationStack { RxNormSearchView().navigationTitle("Product Search") }
+                case nil:
+                    ContentUnavailableView("Select a Category",
+                        systemImage: "sidebar.left"
+                    )
             }
         }
         .sheet(isPresented: $showingAddLabelersSheet) {
@@ -117,14 +111,13 @@ struct OrdersTab: View {
                 Spacer()
                 OrderGeneratorButton()
             }
-
             List(filtered) { order in
                 NavigationLink(value: order.id) {
                     OrderRow(order: order)
                 }
             }
             .navigationTitle(status.title)
-            .navigationDestination(for: CompoundOrder.ID.self) { orderID in
+            .navigationDestination(for: CSPOrder.ID.self) { orderID in
                 if let order = orders.first(where: { $0.id == orderID }) {
                     OrderDetailScene(order: order, store: store)
                 } else {
@@ -153,6 +146,7 @@ private enum SidebarSelection: Hashable {
 
 private enum OrderStatusFilter: String, CaseIterable, Identifiable {
     case pending
+    case staging
     case preparing
     case waitingForApproval
     case remediation
@@ -163,52 +157,37 @@ private enum OrderStatusFilter: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .pending:
-            "Pending"
-        case .preparing:
-            "Preparing"
-        case .waitingForApproval:
-            "Waiting for Approval"
-        case .remediation:
-            "Remediation"
-        case .approved:
-            "Recently Approved"
-        case .rejected:
-            "Recently Rejected"
+        case .pending:            "Pending"
+        case .staging:            "Staging"
+        case .preparing:          "Preparing"
+        case .waitingForApproval: "Waiting for Approval"
+        case .remediation:        "Remediation"
+        case .approved:           "Recently Approved"
+        case .rejected:           "Recently Rejected"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .pending:
-            "clock"
-        case .preparing:
-            "syringe"
-        case .waitingForApproval:
-            "hourglass"
-        case .remediation:
-            "wrench.and.screwdriver"
-        case .approved:
-            "checkmark.circle"
-        case .rejected:
-            "xmark.circle"
+        case .pending:            "clock"
+        case .staging:            "rectangle.grid.3x1"
+        case .preparing:          "syringe"
+        case .waitingForApproval: "hourglass"
+        case .remediation:        "wrench.and.screwdriver"
+        case .approved:           "checkmark.circle"
+        case .rejected:           "xmark.circle"
         }
     }
 
-    func matches(_ order: CompoundOrder) -> Bool {
+    func matches(_ order: CSPOrder) -> Bool {
         switch self {
-        case .pending:
-            order.status == .pending
-        case .preparing:
-            order.status == .preparing
-        case .waitingForApproval:
-            order.status == .waitingForApproval
-        case .remediation:
-            order.status == .remediation
-        case .approved:
-            order.status == .approved
-        case .rejected:
-            order.status == .rejected
+        case .pending:            order.status == .pending
+        case .staging:            order.status == .staging
+        case .preparing:          order.status == .preparing
+        case .waitingForApproval: order.status == .waitingForApproval
+        case .remediation:        order.status == .remediation
+        case .approved:           order.status == .approved
+        case .rejected:           order.status == .rejected
         }
     }
 }
@@ -216,6 +195,7 @@ private enum OrderStatusFilter: String, CaseIterable, Identifiable {
 private enum SidebarExtra: String, CaseIterable, Identifiable {
     case facility
     case labelers
+    case productSearch
 
     var id: Self { self }
 
@@ -223,6 +203,7 @@ private enum SidebarExtra: String, CaseIterable, Identifiable {
         switch self {
         case .facility: "Facility"
         case .labelers: "Labelers"
+        case .productSearch: "Product Search"
         }
     }
 
@@ -230,6 +211,7 @@ private enum SidebarExtra: String, CaseIterable, Identifiable {
         switch self {
         case .facility: "building.2.fill"
         case .labelers: "shippingbox.fill"
+        case .productSearch: "box.fill"
         }
     }
 }
@@ -253,7 +235,6 @@ struct Badge: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(color.opacity(0.15))
             )
-            .onTapGesture { color = .green; text = "Verified" }
     }
 }
 
@@ -275,7 +256,7 @@ struct OrdersTabPreview: View {
             )
 
             let container = try ModelContainer(
-                for: CompoundOrder.self,
+                for: CSPOrder.self,
                 Labeler.self,
                 configurations: configuration
             )

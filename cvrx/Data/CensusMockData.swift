@@ -1,5 +1,5 @@
 //
-//  MockData+Census.swift
+//  MockDataCensus.swift
 //  cvrx
 //
 //  Time-stepped admit/discharge/transfer simulator that operates directly on
@@ -40,19 +40,14 @@ extension MockData {
     struct CensusParams {
         /// Probability that a vacant (or reserved) bed receives a new admit each tick.
         var admitProbability: Double = 0.18
-
         /// Probability that an occupied bed discharges its patient each tick.
         var dischargeProbability: Double = 0.10
-
         /// Of discharges, the fraction that become transfers (same patient, new bed).
         var transferShare: Double = 0.25
-
         /// Simulation clock step in minutes.
         var minutesPerTick: Int = 60
-
         /// Fraction of beds to pre-fill in the tick-0 snapshot (0…1).
         var initialOccupancy: Double = 0.60
-
         /// OccupancyStatus values eligible to receive a new admit.
         /// Typically [.vacant] but can include .reserved if your workflow allows it.
         var admissibleStatuses: Set<OccupancyStatus> = [.vacant]
@@ -76,10 +71,11 @@ extension MockData {
     static func simulateCensus(
         in context: ModelContext,
         ticks: Int = 12,
-        params: CensusParams = CensusParams(),
+        params: CensusParams? = nil,
         seed: UInt64? = nil
     ) -> [CensusEvent] {
 
+        let params = params ?? CensusParams()
         var rng = SeededGenerator(seed: seed ?? UInt64.random(in: .min ... .max))
 
         let allBeds = fetchAllBeds(from: context)
@@ -89,7 +85,7 @@ extension MockData {
         var clock = Date.now
 
         // ── Tick 0: initial occupancy snapshot ───────────────────────────────
-        for bed in allBeds where params.admissibleStatuses.contains(bed.occupancyStatus) {
+        for bed in allBeds where params.admissibleStatuses.contains(bed.status) {
             guard Double.random(in: 0...1, using: &rng) < params.initialOccupancy else { continue }
             let patient = admitNewPatient(to: bed, in: context, &rng)
             events.append(CensusEvent(
@@ -108,7 +104,7 @@ extension MockData {
             var freedThisTick = Set<UUID>()
 
             // Pass 1 — discharges / transfers on currently occupied beds.
-            for bed in allBeds where bed.occupancyStatus == .occupied {
+            for bed in allBeds where bed.status == .occupied {
                 guard Double.random(in: 0...1, using: &rng) < params.dischargeProbability
                 else { continue }
 
@@ -125,7 +121,7 @@ extension MockData {
                     let dest = allBeds.first {
                         $0.id != bed.id
                         && !freedThisTick.contains($0.id)
-                        && params.admissibleStatuses.contains($0.occupancyStatus)
+                        && params.admissibleStatuses.contains($0.status)
                     }
 
                     if let dest {
@@ -152,7 +148,7 @@ extension MockData {
 
             // Pass 2 — admits on beds that are admissible and weren't just freed.
             for bed in allBeds
-            where params.admissibleStatuses.contains(bed.occupancyStatus)
+            where params.admissibleStatuses.contains(bed.status)
                 && !freedThisTick.contains(bed.id)
             {
                 guard Double.random(in: 0...1, using: &rng) < params.admitProbability
@@ -208,7 +204,7 @@ private extension MockData {
 
     static func occupy(_ bed: Bed, with patient: Patient) {
         bed.patient = patient
-        bed.occupancyStatus = .occupied
+        bed.status = .occupied
         // Keep Patient's string fields in sync with the destination bed
         // so any legacy floor/room/bed reads stay accurate.
         patient.floor = bed.room.floor.name
@@ -218,7 +214,7 @@ private extension MockData {
 
     static func vacate(_ bed: Bed) {
         bed.patient = nil
-        bed.occupancyStatus = .vacant
+        bed.status = .vacant
     }
 
     // MARK: Store access

@@ -44,7 +44,6 @@ extension User: Codable {
 
     convenience init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-
         self.init(
             id: try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
             username: try container.decode(String.self, forKey: .username),
@@ -80,17 +79,18 @@ extension EnvironmentValues {
     }
 }
 
-// MARK: - Role
 
 enum UserRole: String, Codable, Hashable {
     case cpht = "cpht"
-        case hdcpht = "hdcpht"
-        case rph = "rph"
+    case hdcpht = "hdcpht"
+    case srcpht = "srcpht"
+    case rph = "rph"
 
     var displayName: String {
         switch self {
         case .cpht: "Technician"
         case .hdcpht: "Hazardous Drug Technician"
+        case .srcpht: "Senior Technician"
         case .rph: "RPh"
         }
     }
@@ -103,7 +103,7 @@ enum UserRole: String, Codable, Hashable {
 
     var canOverrideScan: Bool {
         switch self {
-        case .rph, .hdcpht: true
+        case .rph, .hdcpht, .srcpht: true
         case .cpht: false
         }
     }

@@ -2,16 +2,16 @@ import SwiftUI
 
 // MARK: - Pin marker
 
-/// A numbered purple pin used both interactively (composer) and read-only
-/// (detail sheet). The marker is offset upward so the visual "point" sits at
-/// the tapped location.
+/// A numbered pin used both interactively (composer) and read-only (detail sheet).
+/// The marker is offset upward so the visual "point" sits at the tapped location.
 struct PinMarker: View {
     let number: Int
+    var color: Color = .purple
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(Color.purple)
+                .fill(color)
                 .frame(width: 28, height: 28)
                 .shadow(color: .black.opacity(0.45), radius: 2, x: 0, y: 1)
 
@@ -42,9 +42,10 @@ struct PinMarker: View {
 struct PinnableImageCard: View {
     let capture: CompoundCapture
     let pins: [CaptureFlag]
-    /// Ordinal numbers for these pins relative to the whole remediation set.
+    /// Ordinal numbers for these pins relative to the whole set.
     /// Pre-computed by the parent so numbering is consistent across pages.
     let numbering: [UUID: Int]
+    var pinColor: Color = .purple
     var onAddPin: ((Double, Double) -> Void)? = nil
     var onRemovePin: ((CaptureFlag) -> Void)? = nil
 
@@ -75,7 +76,7 @@ struct PinnableImageCard: View {
                             }
 
                         ForEach(pins) { pin in
-                            PinMarker(number: numbering[pin.id] ?? 0)
+                            PinMarker(number: numbering[pin.id] ?? 0, color: pinColor)
                                 .position(
                                     x: CGFloat(pin.x) * geo.size.width,
                                     y: CGFloat(pin.y) * geo.size.height
@@ -146,6 +147,7 @@ struct RemediationComposerSheet: View {
     @State private var flags: [CaptureFlag] = []
     @State private var currentIndex: Int
 
+    @Environment(\.currentUser) private var user
     @Environment(\.dismiss) private var dismiss
 
     init(
@@ -230,7 +232,8 @@ struct RemediationComposerSheet: View {
                     pins: pinsForCurrent(captureID: capture.id),
                     numbering: globalNumbering,
                     onAddPin: { x, y in
-                        flags.append(CaptureFlag(captureID: capture.id, x: x, y: y))
+                        flags.append(CaptureFlag(captureID: capture.id,
+                                                 x: x, y: y, createdBy: user!, note: ""))
                     },
                     onRemovePin: { pin in
                         flags.removeAll { $0.id == pin.id }

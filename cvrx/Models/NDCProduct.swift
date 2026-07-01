@@ -7,10 +7,39 @@
 
 import SwiftData
 
+enum Dimension: Codable, Hashable, Equatable {
+    case mass
+    case volume
+    case activity
+    case charge
+    case time
+}
 
-struct Measurement: Codable {
+struct RxUnit: Codable, Hashable, Equatable {
+    var name: String
+    var id: String { name }
+    var inlineDisplay: String
+    var dimension: Dimension
+}
+
+struct RxMeasurement: Equatable {
     var magnitude: Double
-    var unit: String
+    var unit: RxUnit
+}
+
+extension RxMeasurement: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case magnitude
+        case unit
+    }
+    
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            magnitude: try container.decode(Double.self, forKey: .magnitude),
+            unit: try container.decode(RxUnit.self, forKey: .unit)
+        )
+    }
 }
 
 enum AdminRoute: String, Hashable, Codable {
@@ -27,15 +56,15 @@ class NDCProduct {
     var name: String
     var brandedName: String?
     var routes: [AdminRoute]
-    var unitSize: Measurement
+    var unitSize: RxMeasurement
     var isMultiDose: Bool = false
-    
+
     init(
         ndc9: String,
         name: String,
         brandedName: String? = nil,
         routes: [AdminRoute],
-        unitSize: Measurement,
+        unitSize: RxMeasurement,
         isMultiDose: Bool
     ) {
         self.ndc9 = ndc9

@@ -2,11 +2,11 @@ import Foundation
 import AVFoundation
 
 final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
-    nonisolated let orderID: CompoundOrder.ID
+    nonisolated let orderID: CSPOrder.ID
     nonisolated let kind: CaptureKind
     nonisolated let completion: (Result<URL, Error>) -> Void
 
-    init(orderID: CompoundOrder.ID, kind: CaptureKind, completion: @escaping (Result<URL, Error>) -> Void) {
+    init(orderID: CSPOrder.ID, kind: CaptureKind, completion: @escaping (Result<URL, Error>) -> Void) {
         self.orderID = orderID
         self.kind = kind
         self.completion = completion

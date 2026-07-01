@@ -3,23 +3,28 @@ import SwiftData
 
 @main
 struct RxCompoundingDocumentationApp: App {
-    @State
-    private var user: User = MockData.makeUserJts()
+    
+    @State private var user: User = MockData.makeUserJts()
+    @State private var appMode: AppMode = .prepare
 
     private let container: ModelContainer
     private let store: CompoundingStore
 
     init() {
         let schema = Schema([
-            CompoundOrder.self,
+            CSPOrder.self,
+            CSPEvent.self,
             VerificationRecord.self,
             AuditEvent.self,
             RemediationRequest.self,
             RemediationCapture.self,
             RemediationLotChange.self,
+            BUDMultidosePolicy.self,
+            CaptureFlag.self,
             CompoundComponent.self,
             CompoundUtilizedLot.self,
             ScanOverride.self,
+            ScanEvent.self,
             CompoundCapture.self,
             Compound.self,
             Product.self,
@@ -31,6 +36,8 @@ struct RxCompoundingDocumentationApp: App {
             FloorUnit.self,
             Room.self,
             Bed.self,
+            SearchHistoryEntry.self,
+            CachedNDCName.self
         ])
 
         do {
@@ -58,4 +65,10 @@ struct RxCompoundingDocumentationApp: App {
                 .environment(\.currentUser, user)
         }
     }
+}
+
+
+enum AppMode {
+    case prepare
+    case verify
 }

@@ -43,8 +43,9 @@ enum ContainerKind: String, Hashable, Codable {
     case Other
 }
 
+@MainActor
 @Model
-final class CompoundOrder {
+final class CSPOrder {
     @Attribute(.unique) var id: UUID
     var orderNumber: String
     var patient: Patient
@@ -53,7 +54,11 @@ final class CompoundOrder {
     var route: String
     var dueTime: Date
     var recipeText: String
+    
+    @Relationship(deleteRule: .cascade, inverse: \CompoundComponent.cspOrder)
     var components: [CompoundComponent]
+
+    @Relationship(deleteRule: .cascade, inverse: \CompoundCapture.cspOrder)
     var captures: [CompoundCapture]
     var status: OrderStatus
     var currentStepIndex: Int
@@ -102,7 +107,7 @@ final class CompoundOrder {
 
     var captureMutationsAllowed: Bool {
         switch status {
-        case .pending, .preparing, .compounding, .remediation: return true
+        case .pending, .staging, .preparing, .remediation: return true
         case .waitingForApproval, .approved, .rejected: return false
         }
     }

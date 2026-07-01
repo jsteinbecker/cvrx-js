@@ -31,4 +31,13 @@ final class Patient {
             guard let dob else { return nil }
         return date.timeIntervalSince(dob) / (365.2425 * 24 * 60 * 60)
     }
+    
+    var initials: String {
+        let nameParts = self.name.split(separator: " ")
+        guard let first = nameParts.first?.first else { return "" }
+        if nameParts.count > 1, let last = nameParts.last?.first {
+            return "\(first)\(last)".uppercased()
+        }
+        return String(first).uppercased()
+    }
 }

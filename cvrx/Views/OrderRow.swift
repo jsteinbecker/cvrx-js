@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct OrderRow: View {
-    let order: CompoundOrder
+    let order: CSPOrder
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -11,18 +11,19 @@ struct OrderRow: View {
                 Spacer()
                 StatusPill(status: order.status)
             }
-
             Text(order.medicationName)
                 .font(.subheadline)
                 .foregroundStyle(.primary)
-
-            Text(order.patient.name)
+            Text(order.patient.room)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-            ProgressView(value: Double(order.fulfilledComponentCount), total: Double(max(order.components.count, 1))) {
-                Text("Components: \(order.fulfilledComponentCount)/\(order.components.count)")
-                    .font(.caption2)
+            HStack {
+                Image(systemName: "person.crop.square", variableValue: 1.00)
+                    .foregroundColor(Color.secondary)
+                    .font(.system(.caption, weight: .thin))
+                Text(order.patient.initials)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 4)
@@ -43,13 +44,13 @@ struct StatusPill: View {
 
     private var statusColor: Color {
         switch status {
-        case .pending: .gray
-        case .preparing: .secondary
-        case .compounding: .blue
+        case .pending:            .gray
+        case .staging:            .blue
+        case .preparing:          .teal
         case .waitingForApproval: .orange
-        case .remediation: .purple
-        case .approved: .green
-        case .rejected: .red
+        case .remediation:        .purple
+        case .approved:           .green
+        case .rejected:           .red
         }
     }
 }

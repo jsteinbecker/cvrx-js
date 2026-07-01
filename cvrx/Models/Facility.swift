@@ -52,10 +52,15 @@ final class Facility {
 
 
 enum FloorType: String, Codable {
+    /// Med/Surg
     case ms
+    /// Progressive Care
     case pc
+    /// Intensive Care
     case ic
+    /// Observation
     case ob
+    /// Outpatient
     case op
 }
 
@@ -113,7 +118,7 @@ final class FloorUnit {
 
 @Model
 final class Room {
-    var id: UUID
+    @Attribute(.unique) var id: UUID
     var floor: FloorUnit
     var name: String
 
@@ -145,16 +150,16 @@ enum OccupancyStatus: String, Codable {
 
 @Model
 final class Bed {
-    var id: UUID
+    @Attribute(.unique) var id: UUID
     var name: String
     var room: Room
-    var occupancyStatus: OccupancyStatus = OccupancyStatus.vacant
+    var status: OccupancyStatus = OccupancyStatus.vacant
     var patient: Patient?
 
     init(id: UUID, name: String, room: Room, occupancyStatus: OccupancyStatus = .vacant) {
         self.id = id
         self.name = name
         self.room = room
-        self.occupancyStatus = occupancyStatus
+        self.status = occupancyStatus
     }
 }

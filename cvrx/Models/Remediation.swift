@@ -1,27 +1,6 @@
 import Foundation
 import SwiftData
 
-// MARK: - Capture Flag (pin on remediation image)
-
-/// A single pin placed on a capture during remediation. Position is normalized
-/// to [0, 1] in both axes so it renders consistently regardless of the
-/// container size used to display the image.
-struct CaptureFlag: Identifiable, Hashable, Codable {
-    let id: UUID
-    var captureID: UUID
-    var x: Double
-    var y: Double
-
-    init(id: UUID = UUID(), captureID: UUID, x: Double, y: Double) {
-        self.id = id
-        self.captureID = captureID
-        self.x = x
-        self.y = y
-    }
-}
-
-// MARK: - Remediation Capture
-
 /// An image captured during remediation to document a fix.
 /// Separate from original CompoundCapture so we can distinguish
 /// problem documentation (original) from solution documentation (remediation).

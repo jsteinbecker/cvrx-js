@@ -3,7 +3,7 @@ import SwiftUI
 /// Verification scene. Built around a large image with carousel navigation,
 /// pinch-to-zoom, and quick approve/reject actions.
 struct VerifyScene: View {
-    var order: CompoundOrder
+    var order: CSPOrder
     @Environment(\.currentUser) var user
     let store: CompoundingStore
 
@@ -206,7 +206,7 @@ struct ZoomableCarousel: View {
     @Binding var currentIndex: Int
     /// Source of remediation context; the carousel derives per-capture badges
     /// from this to apply borders and dimming.
-    var order: CompoundOrder
+    var order: CSPOrder
 
     var body: some View {
         VStack(spacing: 0) {
@@ -247,6 +247,18 @@ struct ZoomableCarousel: View {
                             .padding(.vertical, 3)
                             .background(Capsule().fill(badge.borderColor.opacity(0.15)))
                     }
+                }
+
+                if captures.indices.contains(currentIndex),
+                   !captures[currentIndex].preparerFlags.isEmpty {
+                    let count = captures[currentIndex].preparerFlags.count
+                    Label("\(count) preparer pin\(count == 1 ? "" : "s")",
+                          systemImage: "mappin.and.ellipse")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.orange.opacity(0.15)))
                 }
 
                 Spacer()
@@ -293,9 +305,26 @@ struct ZoomableImageView: View {
                         case .empty:
                             ProgressView()
                         case .success(let image):
+                            // Overlay is on the fitted image so pins are positioned
+                            // relative to the actual image area, not the letterbox frame.
                             image
                                 .resizable()
                                 .scaledToFit()
+                                .overlay {
+                                    if !capture.preparerFlags.isEmpty {
+                                        GeometryReader { imageGeo in
+                                            ForEach(Array(capture.preparerFlags.enumerated()), id: \.element.id) { idx, pin in
+                                                PinMarker(number: idx + 1, color: .orange)
+                                                    .allowsHitTesting(false)
+                                                    .position(
+                                                        x: CGFloat(pin.x) * imageGeo.size.width,
+                                                        y: CGFloat(pin.y) * imageGeo.size.height
+                                                    )
+                                            }
+                                        }
+                                        .allowsHitTesting(false)
+                                    }
+                                }
                         case .failure:
                             placeholder
                         @unknown default:
@@ -388,7 +417,7 @@ struct ZoomableImageView: View {
 struct CarouselThumbnailStrip: View {
     let captures: [CompoundCapture]
     @Binding var currentIndex: Int
-    var order: CompoundOrder
+    var order: CSPOrder
 
     var body: some View {
         ScrollViewReader { proxy in

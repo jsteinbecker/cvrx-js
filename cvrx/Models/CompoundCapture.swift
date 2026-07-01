@@ -6,6 +6,7 @@ import SwiftData
 @Model
 final class CompoundCapture {
     @Attribute(.unique) var id: UUID
+    var cspOrder: CSPOrder?
     /// Type of capture (reference, auxiliary, etc.)
     var kind: CaptureKind
     /// Who captured this image.
@@ -17,23 +18,29 @@ final class CompoundCapture {
     var imageName: String?
     /// Optional note (e.g., "labeled syringe", "vial detail").
     var note: String?
+    /// Pins placed by the preparer to highlight areas that are difficult to capture clearly.
+    var preparerFlags: [CaptureFlag]
 
     init(
         id: UUID = UUID(),
+        cspOrder: CSPOrder? = nil,
         kind: CaptureKind,
         capturedBy: User? = nil,
         timestamp: Date = Date(),
         imageURL: URL? = nil,
         imageName: String? = nil,
-        note: String? = nil
+        note: String? = nil,
+        preparerFlags: [CaptureFlag] = []
     ) {
         self.id = id
+        self.cspOrder = cspOrder
         self.kind = kind
         self.capturedBy = capturedBy
         self.timestamp = timestamp
         self.imageURL = imageURL
         self.imageName = imageName
         self.note = note
+        self.preparerFlags = preparerFlags
     }
     
     /// Display name showing who captured and when.

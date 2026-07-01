@@ -154,7 +154,30 @@ final class ScanOverride {
     }
 }
 
-// MARK: - Utilized Lot (one physical container drawn from)
+@Model class ScanEvent {
+    @Attribute(.unique) var id: UUID = UUID()
+    var scannedValue: String
+    var timestamp: Date
+    var removed: Bool = false
+    var user: User
+    var cul: CompoundUtilizedLot? = nil
+    
+    init(
+        id: UUID,
+        scannedValue: String,
+        timestamp: Date,
+        removed: Bool,
+        user: User,
+        cul: CompoundUtilizedLot? = nil
+    ) {
+        self.id = id
+        self.scannedValue = scannedValue
+        self.timestamp = timestamp
+        self.removed = removed
+        self.user = user
+        self.cul = cul
+    }
+}
 
 @Model
 final class CompoundUtilizedLot {
@@ -173,7 +196,7 @@ final class CompoundUtilizedLot {
     var scannedAt: Date
     /// Record of any overrides applied to this lot (field corrections, barcode corrections, etc.).
     var overrides: [ScanOverride] = []
-
+    
     init(
         id: UUID = UUID(),
         barcodeValue: String? = nil,
@@ -218,6 +241,8 @@ final class CompoundUtilizedLot {
 @Model
 final class CompoundComponent {
     @Attribute(.unique) var id: UUID
+    var compound: Compound?
+    var cspOrder: CSPOrder?
     var product: Product
     /// The total target quantity for this component.
     var totalQuantity: Double
@@ -226,15 +251,18 @@ final class CompoundComponent {
     var utilizedLots: [CompoundUtilizedLot]
     /// Indicates the component has at least one verified scan.
     var isScanned: Bool { !utilizedLots.isEmpty }
-
+    var scanOverride: ScanOverride? = nil
+    
     init(
         id: UUID = UUID(),
+        compound: Compound? = nil,
         product: Product,
         totalQuantity: Double,
         quantityUnit: QuantityUnit,
         utilizedLots: [CompoundUtilizedLot] = []
     ) {
         self.id = id
+        self.compound = compound
         self.product = product
         self.totalQuantity = totalQuantity
         self.quantityUnit = quantityUnit

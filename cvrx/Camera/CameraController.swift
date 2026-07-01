@@ -5,7 +5,7 @@ import AVFoundation
 final class CameraController: NSObject {
     let session = AVCaptureSession()
 
-    private let sessionQueue = DispatchQueue(label: "rxcompound.camera.session")
+    let sessionQueue = DispatchQueue(label: "rxcompound.camera.session")
     private let photoOutput = AVCapturePhotoOutput()
 
     // The delegates dictionary is mutated from both `capturePhoto` (on
@@ -53,7 +53,7 @@ final class CameraController: NSObject {
         }
     }
 
-    func capturePhoto(orderID: CompoundOrder.ID, kind: CaptureKind) async throws -> URL {
+    func capturePhoto(orderID: CSPOrder.ID, kind: CaptureKind) async throws -> URL {
         guard isConfigured else { throw CameraError.notConfigured }
 
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
@@ -135,4 +135,77 @@ final class CameraController: NSObject {
         session.addOutput(photoOutput)
         photoOutput.maxPhotoQualityPrioritization = .quality
     }
+    
+    /// Persists externally-sourced image data (Photos library or Files) as
+        /// a capture. Mirrors `capturePhoto`'s queue discipline even though no
+        /// AVFoundation session state is touched here, to keep all photo I/O
+        /// serialized through `sessionQueue` and avoid any race with an
+        /// in-flight `capturePhoto` call writing to the same order's directory.
+        func saveImportedImage(data: Data, orderID: CSPOrder.ID, kind: CaptureKind) async throws -> URL {
+            guard isConfigured else { throw CameraError.notConfigured }
+
+            return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+                sessionQueue.async {
+                    do {
+                        let url = try Self.writeImportedJPEG(
+                            data: data,
+                            orderID: orderID,
+                            kind: kind
+                        )
+                        continuation.resume(returning: url)
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        }
+
+        /// Normalizes arbitrary image data (HEIC/PNG/JPEG) to JPEG and writes
+        /// it to disk using the SAME directory/naming convention as
+        /// `PhotoCaptureDelegate` uses for live captures.
+        ///
+        /// ⚠️ ASSUMPTION: I don't have `PhotoCaptureDelegate`'s source, so I
+        /// can't see exactly how it derives the destination URL for a given
+        /// (orderID, kind) pair. Below is a placeholder — swap the body of
+        /// `destinationURL(orderID:kind:)` for whatever `PhotoCaptureDelegate`
+        /// actually does (e.g. if it asks a `CaptureStorage` helper, or builds
+        /// a path under Application Support / Documents). If you paste that
+        /// delegate, I'll wire this up exactly instead of guessing.
+        private static func writeImportedJPEG(data: Data, orderID: CSPOrder.ID, kind: CaptureKind) throws -> URL {
+            let normalizedData: Data
+            #if canImport(UIKit)
+            guard let image = UIImage(data: data),
+                  let jpegData = image.jpegData(compressionQuality: 0.9) else {
+                throw CameraError.invalidImageData
+            }
+            normalizedData = jpegData
+            #elseif canImport(AppKit)
+            guard let image = NSImage(data: data),
+                  let tiff = image.tiffRepresentation,
+                  let bitmap = NSBitmapImageRep(data: tiff),
+                  let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else {
+                throw CameraError.invalidImageData
+            }
+            normalizedData = jpegData
+            #else
+            normalizedData = data
+            #endif
+
+            let url = try destinationURL(orderID: orderID, kind: kind)
+            try normalizedData.write(to: url, options: .atomic)
+            return url
+        }
+
+        private static func destinationURL(orderID: CSPOrder.ID, kind: CaptureKind) throws -> URL {
+            let fm = FileManager.default
+            let base = try fm.url(for: .applicationSupportDirectory,
+                                   in: .userDomainMask,
+                                   appropriateFor: nil,
+                                   create: true)
+            let orderDir = base
+                .appendingPathComponent("Captures", isDirectory: true)
+                .appendingPathComponent("\(orderID)", isDirectory: true)
+            try fm.createDirectory(at: orderDir, withIntermediateDirectories: true)
+            return orderDir.appendingPathComponent("\(kind.rawValue)_\(UUID().uuidString).jpg")
+        }
 }
