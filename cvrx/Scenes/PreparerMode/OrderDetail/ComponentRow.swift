@@ -65,7 +65,6 @@ struct ComponentRow: View {
     @State private var didInit = false
     @State private var lotPendingRemoval: CompoundUtilizedLot?
     @FocusState private var focus: Cell?
-    @State private var highlightedIndex: Int? = nil
     @State private var isEditing = false
     
     #if os(iOS)
@@ -102,13 +101,10 @@ struct ComponentRow: View {
         }
             .padding(.vertical, 8)
             .padding(.horizontal, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(.thickMaterial)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(statusColor.opacity(0.1), lineWidth: 2)
+            .roundedPanel(
+                fill: .thickMaterial,
+                borderColor: statusColor.opacity(0.1),
+                lineWidth: 2
             )
             .confirmationDialog(
                 "Remove lot \(lotPendingRemoval?.lot ?? "")?",
@@ -133,7 +129,33 @@ struct ComponentRow: View {
                 }
             }
             .zIndex(mfgDropdownActive ? 1 : 0)
+            #if os(iOS)
+            .toolbar { keyboardNavigationToolbar }
+            #endif
     }
+
+    #if os(iOS)
+    /// The Tab/Shift-Tab equivalent: an accessory bar above the keyboard with
+    /// Previous/Next chevrons that walk `focusOrder`, plus a Done button.
+    @ToolbarContentBuilder
+    private var keyboardNavigationToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .keyboard) {
+            Button(action: focusPreviousField) {
+                Image(systemName: "chevron.up")
+            }
+            .disabled(!canFocusPrevious)
+
+            Button(action: focusNextField) {
+                Image(systemName: "chevron.down")
+            }
+            .disabled(!canFocusNext)
+
+            Spacer()
+
+            Button("Done") { focus = nil }
+        }
+    }
+    #endif
 
     private var mfgDropdownActive: Bool {
         if case .mfg = focus { return true }
@@ -233,7 +255,7 @@ struct ComponentRow: View {
                     }
                     draftWarnings
                 } else {
-                    Grid(alignment: .leading, horizontalSpacing: 3, verticalSpacing: 6) {
+                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                         columnHeader
                         ForEach(component.utilizedLots) { committedRow($0) }
                         ForEach(drafts) { draft in
@@ -246,27 +268,7 @@ struct ComponentRow: View {
                 }
             }
             if isEditing {
-                HStack(spacing: 12) {
-                    #if os(iOS)
-                    HStack(spacing: 4) {
-                        Button(action: focusPreviousLot) {
-                            Image(systemName: "chevron.left")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(!canFocusPrevious)
-                        
-                        Button(action: focusNextLot) {
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(!canFocusNext)
-                    }
-                    #endif
-                    
+                HStack {
                     Spacer()
                     Button(action: addDraft) {
                         Label("Add Lot", systemImage: "plus")
@@ -281,7 +283,7 @@ struct ComponentRow: View {
 
     private var columnHeader: some View {
         GridRow {
-            columnLabel("DOSE (\(unit))")
+            columnLabel("DOSE UTILIZED")
             columnLabel("LOT/BATCH #")
             columnLabel("EXPIRY")
             columnLabel("MANUFACTURER")
@@ -297,11 +299,16 @@ struct ComponentRow: View {
     }
 
     private func committedRow(_ lot: CompoundUtilizedLot) -> some View {
-        GridRow(alignment: .center) {
-            HStack {
+        GridRow(alignment: .center, ) {
+            HStack(spacing: 2) {
                 Text(Self.format(lot.strengthQuantity))
                     .font(.subheadline.monospacedDigit())
+                Text(unit)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
             }
+            
+            Spacer(minLength: 1)
             
             HStack(spacing: 6) {
                 Image(systemName: lotIconName(for: lot))
@@ -312,32 +319,26 @@ struct ComponentRow: View {
                     .foregroundStyle(lotRequiresDetails(lot) ? .blue : .primary)
             }
             
-            Text(lot.expiration.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? (lotRequiresDetails(lot) ? "Add expiry" : "—"))
-                .font(.caption)
-                .foregroundStyle(lotRequiresDetails(lot) ? .blue : (lot.isExpired ? .red : .secondary))
+            HStack(spacing: 4) {
+                Text(lot.expiration.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? (lotRequiresDetails(lot) ? "Add expiry" : "—"))
+                    .font(.caption)
+                    .foregroundStyle(lotRequiresDetails(lot) ? .blue : (lot.isExpired ? .red : .secondary))
+
+                if let hint = expiryRelativeHint(for: lot.expiration) {
+                    Text(hint)
+                        .font(.caption2.weight(.medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                }
+            }
 
             Text(lot.mfg ?? "—")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-            HStack(spacing: 4) {
-                if canMutate {
-                    Button {
-                        editCommitted(lot)
-                    } label: {
-                        Image(systemName: "pencil").font(.caption)
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
-                    
-                    Button(role: .destructive) {
-                        lotPendingRemoval = lot
-                    } label: {
-                        Image(systemName: "trash").font(.caption)
-                    }
-                    .buttonStyle(.borderless)
-                }
-            }
+            
+            Color.clear.frame(width: 28)
         }
     }
 
@@ -360,26 +361,6 @@ struct ComponentRow: View {
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
-                if canMutate {
-                    HStack(spacing: 2) {
-                        Button { editCommitted(lot) } label: {
-                            Image(systemName: "pencil")
-                                .font(.caption2)
-                                .padding(6)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.secondary)
-                        Button(role: .destructive) { lotPendingRemoval = lot } label: {
-                            Image(systemName: "trash")
-                                .font(.caption2)
-                                .padding(6)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.secondary)
-                    }
-                }
             }
             .padding(.horizontal, 12)
             .padding(.top, 10)
@@ -391,9 +372,20 @@ struct ComponentRow: View {
             HStack(alignment: .top, spacing: 0) {
                 VStack(alignment: .leading, spacing: 3) {
                     compactFieldLabel("Expires")
-                    Text(lot.expiration.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? (lotRequiresDetails(lot) ? "Add expiry" : "—"))
-                        .font(.subheadline)
-                        .foregroundStyle(lotRequiresDetails(lot) ? .blue : (lot.isExpired ? .red : .primary))
+                    HStack(spacing: 5) {
+                        Text(lot.expiration.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? (lotRequiresDetails(lot) ? "Add expiry" : "—"))
+                            .font(.subheadline)
+                            .foregroundStyle(lotRequiresDetails(lot) ? .blue : (lot.isExpired ? .red : .primary))
+
+                        if let hint = expiryRelativeHint(for: lot.expiration) {
+                            Text(hint)
+                                .font(.caption2.weight(.medium).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.trailing, 6)
@@ -413,13 +405,10 @@ struct ComponentRow: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
         }
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.secondary.opacity(0.04))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+        .roundedPanel(
+            cornerRadius: 10,
+            fill: Color.secondary.opacity(0.04),
+            borderColor: Color.primary.opacity(0.06)
         )
     }
 
@@ -449,15 +438,14 @@ struct ComponentRow: View {
 
     // MARK: - Submission & Validation
 
+    /// Per-row submit chain: Qty → Lot → Mfg → commit. This is what fires when
+    /// the person taps the keyboard's return/next key, as opposed to the
+    /// cross-row Previous/Next accessory buttons (see `focusOrder`).
     private func handleSubmit(from cell: Cell) {
         switch cell {
-        case .lot:
-            return // Caller already handles moving focus to mfg
-        case .qty:
-            focus = .mfg(cell.draftID)
-        case .mfg:
-            // Instead of evaluating all drafts globally, just commit this specific row.
-            commitDraft(id: cell.draftID)
+        case .qty(let id): focus = .lot(id)
+        case .lot(let id): focus = .mfg(id)
+        case .mfg(let id): commitDraft(id: id)
         }
     }
 
@@ -509,6 +497,9 @@ struct ComponentRow: View {
         return GridRow(alignment: .center) {
             MeasurementInput(magnitudeText: draft.quantityText, unit: unit)
                 .frame(minWidth: 55)
+                .focused($focus, equals: .qty(entry.id))
+                .submitLabel(.next)
+                .onSubmit { handleSubmit(from: .qty(entry.id)) }
             TextField("", text: draft.lotNumber)
                 .textFieldStyle(.roundedBorder)
                 .frame(minWidth: 90, maxWidth: 130)
@@ -523,6 +514,7 @@ struct ComponentRow: View {
             expiryCell(draft)
                 .padding(.leading, 5)
             mfgAutocompleteField(draft)
+                .frame(minWidth: 100, maxWidth: 140)
                 .padding(.leading, 5)
             Button(role: .destructive) { removeDraft(entry.id) } label: {
                 Image(systemName: "xmark.circle.fill")
@@ -530,6 +522,7 @@ struct ComponentRow: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
+            .padding(5)
         }
     }
 
@@ -562,6 +555,9 @@ struct ComponentRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     compactFieldLabel("Qty (\(unit))")
                     MeasurementInput(magnitudeText: draft.quantityText, unit: unit)
+                        .focused($focus, equals: .qty(entry.id))
+                        .submitLabel(.next)
+                        .onSubmit { handleSubmit(from: .qty(entry.id)) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.trailing, 6)
@@ -610,13 +606,10 @@ struct ComponentRow: View {
             .padding(.top, 10)
             .padding(.bottom, 12)
         }
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.secondary.opacity(0.07))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        .roundedPanel(
+            cornerRadius: 10,
+            fill: Color.secondary.opacity(0.07),
+            borderColor: Color.primary.opacity(0.08)
         )
     }
 
@@ -666,113 +659,17 @@ struct ComponentRow: View {
         }
     }
     
-    @ViewBuilder
     private func mfgAutocompleteField(_ draft: Binding<DraftLotEntry>) -> some View {
         let entry = draft.wrappedValue
-        let isFocused = focus == .mfg(entry.id)
-        let matches: [String] = {
-            guard isFocused, !entry.mfg.isEmpty else { return [] }
-            let query = entry.mfg
 
-            return LabelerStore.names
-                .filter { $0.localizedCaseInsensitiveContains(query) }
-                .sorted { lhs, rhs in
-                    let lhsPrefix = lhs.range(of: query, options: [.caseInsensitive, .anchored]) != nil
-                    let rhsPrefix = rhs.range(of: query, options: [.caseInsensitive, .anchored]) != nil
-
-                    if lhsPrefix != rhsPrefix {
-                        return lhsPrefix && !rhsPrefix
-                    }
-                    return lhs.localizedStandardCompare(rhs) == .orderedAscending
-                }
-                .prefix(8)
-                .map { $0 }
-        }()
-
-        let select: (String) -> Void = { name in
-            draft.mfg.wrappedValue = name
-            highlightedIndex = nil
-            // Treat autocomplete selection as a submit from mfg
-            handleSubmit(from: .mfg(entry.id))
-        }
-
-        TextField("", text: draft.mfg)
-            .textFieldStyle(.roundedBorder)
-            .frame(minWidth: 70)
-            .focused($focus, equals: .mfg(entry.id))
-            .submitLabel(.done)
-            .onSubmit { handleSubmit(from: .mfg(entry.id)) }
-            .onChange(of: entry.mfg) { highlightedIndex = nil }
-            .onKeyPress(.downArrow) {
-                guard isFocused, !matches.isEmpty else { return .ignored }
-                highlightedIndex = min((highlightedIndex ?? -1) + 1, matches.count - 1)
-                return .handled
-            }
-            .onKeyPress(.upArrow) {
-                guard isFocused, !matches.isEmpty else { return .ignored }
-                highlightedIndex = max((highlightedIndex ?? matches.count) - 1, 0)
-                return .handled
-            }
-            .onKeyPress(.return) {
-                guard isFocused, let i = highlightedIndex, matches.indices.contains(i)
-                else { return .ignored }
-                select(matches[i])
-                return .handled
-            }
-            .onKeyPress(.tab) {
-                guard isFocused, let i = highlightedIndex, matches.indices.contains(i)
-                else { return .ignored }
-                select(matches[i])
-                return .handled
-            }
-            .onKeyPress(.escape) {
-                guard isFocused, !matches.isEmpty else { return .ignored }
-                highlightedIndex = nil
-                focus = nil
-                return .handled
-            }
-            .overlay(alignment: .topLeading) {
-                if !matches.isEmpty {
-                    mfgAutocompleteDropdown(matches: matches, select: select)
-                }
-            }
-    }
-
-    @ViewBuilder
-    private func mfgAutocompleteDropdown(matches: [String], select: @escaping (String) -> Void) -> some View {
-        VStack(spacing: 0) {
-            Color.clear.frame(height: 32)
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(matches.enumerated()), id: \.element) { index, name in
-                    Button { select(name) } label: {
-                        Text(name)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .background(highlightedIndex == index ? Color.accentColor : Color.clear)
-                    .foregroundStyle(highlightedIndex == index ? Color.white : Color.primary)
-
-                    if index != matches.count - 1 {
-                        Divider()
-                    }
-                }
-            }
-            .zIndex(20)
-            .frame(minWidth: 150, alignment: .leading)
-            .background {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(.ultraThickMaterial)
-                    .blur(radius: 6)
-            }
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.primary.opacity(0.4), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 3)
-        }
+        return MfgAutoCompleteField(
+            text: draft.mfg,
+            isFocused: focus == .mfg(entry.id),
+            onSubmit: { handleSubmit(from: .mfg(entry.id)) },
+            onSelect: { _ in handleSubmit(from: .mfg(entry.id)) },
+            onEscape: { focus = nil }
+        )
+        .focused($focus, equals: .mfg(entry.id))
     }
 
     private func startEditing() {
@@ -783,79 +680,36 @@ struct ComponentRow: View {
         }
     }
 
-    /// Returns all lots (committed + draft) in display order.
-    private func allLots() -> [(type: LotType, index: Int)] {
-        var result: [(LotType, Int)] = []
-        for (i, _) in component.utilizedLots.enumerated() {
-            result.append((.committed(i), i))
-        }
-        for (i, _) in drafts.enumerated() {
-            result.append((.draft(i), i))
-        }
-        return result
+    // MARK: - Field navigation (iOS "Tab" equivalent)
+
+    /// Every focusable cell across all draft rows, in tab order: for each
+    /// draft, Qty → Lot → Mfg, then on to the next draft. Committed lots
+    /// aren't included since they must be pulled into a draft via
+    /// `editCommitted` before they're focusable.
+    private var focusOrder: [Cell] {
+        drafts.flatMap { [Cell.qty($0.id), .lot($0.id), .mfg($0.id)] }
     }
 
-    private enum LotType: Hashable {
-        case committed(Int), draft(Int)
-    }
-
-    /// Finds the current focused lot in the display order.
-    private func currentFocusedLotIndex() -> Int? {
-        let allLots = allLots()
-        guard let currentFocus = focus else { return nil }
-        let focusedDraftID = currentFocus.draftID
-
-        for (i, lotType) in allLots.enumerated() {
-            switch lotType.0 {
-            case .draft(let draftIndex):
-                if drafts[draftIndex].id == focusedDraftID {
-                    return i
-                }
-            case .committed:
-                // Committed lots aren't focusable directly; they're converted
-                // to drafts via editCommitted() before they can be focused.
-                break
-            }
-        }
-        return nil
+    private func moveFocus(by offset: Int) {
+        let order = focusOrder
+        guard let current = focus, let index = order.firstIndex(of: current) else { return }
+        let target = index + offset
+        guard order.indices.contains(target) else { return }
+        focus = order[target]
     }
 
     private var canFocusPrevious: Bool {
-        guard let current = currentFocusedLotIndex() else { return false }
-        return current > 0
+        guard let current = focus, let index = focusOrder.firstIndex(of: current) else { return false }
+        return index > 0
     }
 
     private var canFocusNext: Bool {
-        guard let current = currentFocusedLotIndex() else { return false }
-        return current < allLots().count - 1
+        guard let current = focus, let index = focusOrder.firstIndex(of: current) else { return false }
+        return index < focusOrder.count - 1
     }
 
-    private func focusPreviousLot() {
-        let allLots = allLots()
-        guard let current = currentFocusedLotIndex(), current > 0 else { return }
-        let previousType = allLots[current - 1].0
-        focusLot(type: previousType)
-    }
-
-    private func focusNextLot() {
-        let allLots = allLots()
-        guard let current = currentFocusedLotIndex(), current < allLots.count - 1 else { return }
-        let nextType = allLots[current + 1].0
-        focusLot(type: nextType)
-    }
-
-    private func focusLot(type: LotType) {
-        switch type {
-        case .draft(let index):
-            guard index < drafts.count else { return }
-            focus = .lot(drafts[index].id)
-        case .committed(let index):
-            // For committed lots, we'd need to put them in edit mode first
-            // Pull them into drafts and focus
-            guard index < component.utilizedLots.count else { return }
-            editCommitted(component.utilizedLots[index])
-        }
-    }
+    private func focusPreviousField() { moveFocus(by: -1) }
+    private func focusNextField() { moveFocus(by: 1) }
 
     private func addDraft() {
         var entry = DraftLotEntry()
@@ -979,6 +833,39 @@ struct ComponentRow: View {
         return trimmedLot.isEmpty ? "Details needed" : trimmedLot
     }
 
+    private func expiryRelativeHint(for expiration: Date?) -> String? {
+        guard let expiration else { return nil }
+
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let expiryDay = calendar.startOfDay(for: expiration)
+
+        if expiryDay == today { return "(today)" }
+
+        let isFuture = expiryDay > today
+        let components = isFuture
+            ? calendar.dateComponents([.year, .month, .day], from: today, to: expiryDay)
+            : calendar.dateComponents([.year, .month, .day], from: expiryDay, to: today)
+
+        let years = components.year ?? 0
+        let months = components.month ?? 0
+        let days = components.day ?? 0
+        let valueAndUnit: (value: Int, unit: String)
+
+        if years > 0 {
+            valueAndUnit = (years, "y")
+        } else if months > 0 {
+            valueAndUnit = (months, "mo.")
+        } else {
+            valueAndUnit = (max(days, 1), "d")
+        }
+
+        if isFuture {
+            return "(in \(valueAndUnit.value)\(valueAndUnit.unit))"
+        }
+        return "(\(valueAndUnit.value)\(valueAndUnit.unit) ago)"
+    }
+
     private var unit: String { component.quantityUnit.rawValue }
 
     private var progressText: String {
@@ -1000,7 +887,7 @@ struct ComponentRow: View {
 }
 
 
-private enum LabelerStore {
+private enum   cx {
     static let names: [String] = {
         guard
             let url = Bundle.main.url(forResource: "Labelers", withExtension: "json"),

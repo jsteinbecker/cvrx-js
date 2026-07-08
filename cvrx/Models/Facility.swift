@@ -148,6 +148,7 @@ enum OccupancyStatus: String, Codable {
     }
 }
 
+
 @Model
 final class Bed {
     @Attribute(.unique) var id: UUID

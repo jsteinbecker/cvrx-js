@@ -20,6 +20,8 @@ struct HeroCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .cardSurface()
+        .background(heroCardTint)
+        .overlay(heroCardBorder)
         .clipShape(
             RoundedRectangle(cornerRadius: CardStyle.cornerRadius, style: .continuous)
         )
@@ -100,18 +102,43 @@ struct HeroCard: View {
 
     private var dueText: String {
         if order.dueTime <= .now {
+            if order.status == .approved || order.status == .rejected {
+                return "Due \(RelativeDateFormatter.abbreviated.string(for: order.dueTime))"
+            }
             return "Overdue"
         }
         return "Due \(RelativeDateFormatter.abbreviated.string(for: order.dueTime))"
     }
 
     private var dueTone: Color {
-        switch order.dueTime.timeIntervalSinceNow {
-        case ..<0: return .red
-        case ..<(30 * 60): return .orange
-        default: return .secondary
+        switch order.status {
+        case .approved, .rejected: return .secondary
+        default:
+            switch order.dueTime.timeIntervalSinceNow {
+            case ..<0: return .red
+            case ..<(30 * 60): return .orange
+            default: return .secondary
+            }
         }
     }
+    
+    private var bg: some View {
+        RoundedRectangle(cornerRadius: CardStyle.cornerRadius, style: .continuous)
+            .fill(.thickMaterial)
+    }
+    
+    private var heroCardTint: Color {
+        switch dueText {
+        case "Overdue": .red
+        default: .secondary
+        }
+    }
+    
+    private var heroCardBorder: some View {
+        RoundedRectangle(cornerRadius: CardStyle.cornerRadius, style: .continuous)
+            .strokeBorder(heroCardTint.opacity(0.35), lineWidth: 1)
+    }
+
 }
 
 struct RemediationBanner: View {
@@ -206,6 +233,7 @@ struct RemediationBanner: View {
 
 struct ComponentsCard: View {
     let order: CSPOrder
+    var canMutate: Bool = true
     let onAddLot: (CompoundComponent, CompoundUtilizedLot) -> Void
     let onRemoveLot: (CompoundComponent, CompoundUtilizedLot) -> Void
     var onOverrideLot: ((CompoundComponent, CompoundUtilizedLot) -> Void)? = nil
@@ -217,8 +245,9 @@ struct ComponentsCard: View {
             componentsList
             fulfillmentFooter
         }
-        .cardSurface()
-        .background(.regularMaterial)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(componentCardBackground)
+        .overlay(componentCardBorder)
     }
 
     private var fulfillmentCount: some View {
@@ -245,7 +274,7 @@ struct ComponentsCard: View {
                 }
                 ComponentRow(
                     component: component,
-                    canMutate: order.captureMutationsAllowed,
+                    canMutate: canMutate,
                     onAddLot: { onAddLot(component, $0) },
                     onRemoveLot: { onRemoveLot(component, $0) },
                     onOverrideLot: overrideHandler(for: component)
@@ -278,13 +307,69 @@ struct ComponentsCard: View {
         return { lot in onOverrideLot(component, lot) }
     }
 
+    private var componentCardBackground: some View {
+        RoundedRectangle(cornerRadius: CardStyle.cornerRadius, style: .continuous)
+            .fill(.regularMaterial)
+            .overlay {
+                RoundedRectangle(cornerRadius: CardStyle.cornerRadius, style: .continuous)
+                    .fill(componentCardTint.opacity(0.08))
+            }
+            .shadow(
+                color: CardStyle.shadowColor,
+                radius: CardStyle.shadowRadius,
+                x: 0,
+                y: CardStyle.shadowYOffset
+            )
+    }
+
+    private var componentCardBorder: some View {
+        RoundedRectangle(cornerRadius: CardStyle.cornerRadius, style: .continuous)
+            .strokeBorder(componentCardTint.opacity(componentCardBorderOpacity), lineWidth: 1)
+    }
+
+    private var componentCardTint: Color {
+        switch componentCardState {
+        case .unexpected: .red
+        case .fulfilled: .green
+        case .inProgress: .orange
+        }
+    }
+    
+    private var componentCardBorderOpacity: Double {
+        switch componentCardState {
+        case .unexpected: 0.36
+        case .fulfilled: 0.26
+        case .inProgress: 0.24
+        }
+    }
+
+    private var componentCardState: ComponentCardState {
+        if hasUnexpectedComponentState { return .unexpected }
+        if order.allComponentsFulfilled { return .fulfilled }
+        return .inProgress
+    }
+
+    private var hasUnexpectedComponentState: Bool {
+        order.components.contains { component in
+            component.hasPendingOverrides
+                || component.utilizedLots.contains(where: \.isExpired)
+                || component.quantityAccountedFor > component.totalQuantity + ComponentRow.quantityTolerance
+        }
+    }
+
     private var fulfillmentColor: Color {
-        order.allComponentsFulfilled ? .green : .orange
+        componentCardTint
     }
 
     private var unfulfilledText: String {
         let count = order.unfulfilledComponents.count
         return "\(count) component\(count == 1 ? "" : "s") not yet fulfilled."
+    }
+
+    private enum ComponentCardState {
+        case fulfilled
+        case inProgress
+        case unexpected
     }
 }
 
@@ -293,6 +378,8 @@ struct ComponentsCard: View {
 struct CurrentStepCard: View {
     let order: CSPOrder
     let store: CompoundingStore
+    let currentUser: User?
+    var canMutate: Bool = true
 
     @State private var isCompoundingPresented = false
 
@@ -330,7 +417,7 @@ struct CurrentStepCard: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(!canGoBackward)
+            .disabled(!canGoBackward || !canMutate)
 
             Button(action: goToNextStep) {
                 Image(systemName: "chevron.right")
@@ -338,7 +425,7 @@ struct CurrentStepCard: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(!canGoForward)
+            .disabled(!canGoForward || !canMutate)
         }
     }
 
@@ -376,17 +463,17 @@ struct CurrentStepCard: View {
     }
 
     private var canOpenCompounding: Bool {
-        order.captureMutationsAllowed && order.totalStepCount > 0
+        canMutate
     }
 
     private func goToPreviousStep() {
-        guard canGoBackward else { return }
-        store.previousStep(orderID: order.id)
+        guard canGoBackward, canMutate, let currentUser else { return }
+        store.previousStep(orderID: order.id, changedBy: currentUser)
     }
 
     private func goToNextStep() {
-        guard canGoForward else { return }
-        store.advanceStep(orderID: order.id)
+        guard canGoForward, canMutate, let currentUser else { return }
+        store.advanceStep(orderID: order.id, changedBy: currentUser)
     }
 
     private func openCompounding() {
@@ -398,6 +485,7 @@ struct CurrentStepCard: View {
 struct AllImagesCard: View {
     let captures: [CompoundCapture]
     let order: CSPOrder
+    var canMutate: Bool = true
     var onSelectCapture: ((CompoundCapture) -> Void)?
 
     var body: some View {
@@ -420,7 +508,7 @@ struct AllImagesCard: View {
 
     @ViewBuilder
     private var interactionHint: some View {
-        if order.captureMutationsAllowed, !captures.isEmpty {
+        if canMutate, !captures.isEmpty {
             Text("Tap an image to view or delete.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -432,6 +520,7 @@ struct AllImagesCard: View {
 
 struct RecipeCard: View {
     let order: CSPOrder
+    var canMutate: Bool = true
     let onSelectStep: (Int) -> Void
 
     var body: some View {
@@ -452,51 +541,17 @@ struct RecipeCard: View {
     }
 
     private func recipeStepButton(index: Int, text: String) -> some View {
-        let isCurrent = index == order.currentStepIndex
-
-        return Button {
+        Button {
             onSelectStep(index)
         } label: {
-            HStack(alignment: .top, spacing: 12) {
-                StepNumberBadge(number: index + 1, isCurrent: isCurrent)
-
-                Text(text)
-                    .font(.callout)
-                    .fontWeight(isCurrent ? .semibold : .regular)
-                    .foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
+            RecipeStepRow(
+                index: index,
+                text: text,
+                isCurrent: index == order.currentStepIndex
+            )
         }
         .buttonStyle(.plain)
-    }
-}
-
-private struct StepNumberBadge: View {
-    let number: Int
-    let isCurrent: Bool
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(backgroundColor)
-                .frame(width: 26, height: 26)
-
-            Text("\(number)")
-                .font(.caption.weight(.bold).monospacedDigit())
-                .foregroundStyle(foregroundColor)
-        }
-    }
-
-    private var backgroundColor: Color {
-        isCurrent ? .accentColor : Color.secondary.opacity(0.15)
-    }
-
-    private var foregroundColor: Color {
-        isCurrent ? .white : .secondary
+        .disabled(!canMutate)
     }
 }
 
@@ -504,6 +559,7 @@ private struct StepNumberBadge: View {
 
 struct BottomActionBar: View {
     let order: CSPOrder
+    var canSend: Bool = true
     let onSend: () -> Void
 
     var body: some View {
@@ -542,6 +598,7 @@ struct BottomActionBar: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(.bar)
+        .disabled(!canSend)
     }
 
     private var state: State {

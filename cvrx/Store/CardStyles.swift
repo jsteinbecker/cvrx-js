@@ -48,9 +48,44 @@ private struct CardSurface: ViewModifier {
     }
 }
 
+private struct RoundedPanelSurface: ViewModifier {
+    let cornerRadius: CGFloat
+    let fill: AnyShapeStyle
+    let borderColor: Color
+    let lineWidth: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(fill)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(borderColor, lineWidth: lineWidth)
+            }
+    }
+}
+
 extension View {
     func cardSurface() -> some View {
         modifier(CardSurface())
+    }
+
+    func roundedPanel<S: ShapeStyle>(
+        cornerRadius: CGFloat = 8,
+        fill: S,
+        borderColor: Color = Color.primary.opacity(0.12),
+        lineWidth: CGFloat = 1
+    ) -> some View {
+        modifier(
+            RoundedPanelSurface(
+                cornerRadius: cornerRadius,
+                fill: AnyShapeStyle(fill),
+                borderColor: borderColor,
+                lineWidth: lineWidth
+            )
+        )
     }
 }
 
@@ -101,5 +136,167 @@ struct MetaPill: View {
                 .font(.caption)
         }
         .foregroundStyle(tone)
+    }
+}
+
+struct PillLabel: View {
+    let text: String
+    var systemImage: String? = nil
+    var tone: Color = .accentColor
+    var foregroundStyle: Color? = nil
+    var font: Font = .caption.weight(.semibold)
+    var horizontalPadding: CGFloat = 8
+    var verticalPadding: CGFloat = 4
+    var backgroundOpacity: Double = 0.15
+
+    var body: some View {
+        label
+            .font(font)
+            .foregroundStyle(foregroundStyle ?? tone)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
+            .background(Capsule().fill(tone.opacity(backgroundOpacity)))
+    }
+
+    @ViewBuilder
+    private var label: some View {
+        if let systemImage {
+            Label(text, systemImage: systemImage)
+        } else {
+            Text(text)
+        }
+    }
+}
+
+struct CurrentUserBadge: View {
+    let user: User?
+
+    var body: some View {
+        if let user {
+            HStack(spacing: 5) {
+                Image(systemName: "person.crop.circle.badge.checkmark", variableValue: 1.0)
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(Color.green, Color.white, Color.gray)
+                    .font(.system(size: 16, weight: .regular))
+                Text(user.name)
+            }
+            .padding(5)
+        }
+    }
+}
+
+struct ImageUnavailablePlaceholder: View {
+    var title = "No image available"
+    var systemImage = "photo"
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 48))
+                .foregroundStyle(.tertiary)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct InstructionBar: View {
+    let systemImage: String
+    let text: String
+    var tone: Color
+    var backgroundOpacity: Double = 0.08
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .foregroundStyle(tone)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(tone.opacity(backgroundOpacity))
+    }
+}
+
+enum RecipeStepRowAccessory {
+    case numberBadge
+    case selectionIcon
+}
+
+struct RecipeStepRow: View {
+    let index: Int
+    let text: String
+    let isCurrent: Bool
+    var accessory: RecipeStepRowAccessory = .numberBadge
+    var textFont: Font = .callout
+    var horizontalPadding: CGFloat? = 16
+    var verticalPadding: CGFloat = 12
+
+    var body: some View {
+        HStack(alignment: .top, spacing: accessorySpacing) {
+            accessoryView
+
+            VStack(alignment: .leading, spacing: 2) {
+                if accessory == .selectionIcon {
+                    Text("Step \(index + 1)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(text)
+                    .font(textFont)
+                    .fontWeight(isCurrent ? .semibold : .regular)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if accessory == .selectionIcon {
+                Spacer()
+            }
+        }
+        .padding(.horizontal, horizontalPadding ?? 0)
+        .padding(.vertical, verticalPadding)
+        .contentShape(Rectangle())
+    }
+
+    private var accessorySpacing: CGFloat {
+        switch accessory {
+        case .numberBadge: 12
+        case .selectionIcon: 10
+        }
+    }
+
+    @ViewBuilder
+    private var accessoryView: some View {
+        switch accessory {
+        case .numberBadge:
+            RecipeStepNumberBadge(number: index + 1, isCurrent: isCurrent)
+        case .selectionIcon:
+            Image(systemName: isCurrent ? "largecircle.fill.circle" : "circle")
+                .foregroundStyle(isCurrent ? Color.accentColor : .secondary)
+                .padding(.top, 2)
+        }
+    }
+}
+
+private struct RecipeStepNumberBadge: View {
+    let number: Int
+    let isCurrent: Bool
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(isCurrent ? Color.accentColor : Color.secondary.opacity(0.15))
+                .frame(width: 26, height: 26)
+
+            Text("\(number)")
+                .font(.caption.weight(.bold).monospacedDigit())
+                .foregroundStyle(isCurrent ? .white : .secondary)
+        }
     }
 }

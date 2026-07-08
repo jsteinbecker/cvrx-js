@@ -37,13 +37,7 @@ struct VerificationTab: View {
             }
             .toolbar {
                 ToolbarItem(placement: .automatic) {
-                    HStack {
-                        Image(systemName: "person.crop.circle.badge.checkmark", variableValue: 1.00)
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(Color.green, Color.white, Color.gray)
-                            .font(.system(size: 16, weight: .regular))
-                        Text(user!.name)
-                    }
+                    CurrentUserBadge(user: user)
                 }
             }
         }
@@ -65,12 +59,15 @@ struct VerifyQueueRow: View {
                     Text(order.orderNumber)
                         .font(.headline)
                     if order.remediation != nil {
-                        Text("RE-VERIFY")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(Color.purple))
+                        PillLabel(
+                            text: "RE-VERIFY",
+                            tone: .purple,
+                            foregroundStyle: .white,
+                            font: .caption2.weight(.bold),
+                            horizontalPadding: 6,
+                            verticalPadding: 2,
+                            backgroundOpacity: 1.0
+                        )
                     }
                 }
                 Text(order.medicationName)

@@ -52,7 +52,7 @@ enum DoseSizeSelector {
     /// here.
     ///
     /// - Parameters:
-    ///   - orderedDose: The dose amount to fulfill, in `orderedUnit`.
+    ///   - orderedDose: `Decimal`-- The dose amount to fulfill, in `orderedUnit`.
     ///   - orderedUnit: The unit the dose is expressed in.
     ///   - sizes: Candidate manufactured sizes (unlimited supply assumed —
     ///     see note at bottom of file for the limited-stock variant).

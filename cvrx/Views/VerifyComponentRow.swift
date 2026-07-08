@@ -66,13 +66,9 @@ struct VerifyComponentRow: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(
-                    component.isFulfilled() ? Color.green : Color.gray.opacity(0.3),
-                    lineWidth: 1
-                )
+        .roundedPanel(
+            fill: Color.clear,
+            borderColor: component.isFulfilled() ? Color.green : Color.gray.opacity(0.3)
         )
     }
 }

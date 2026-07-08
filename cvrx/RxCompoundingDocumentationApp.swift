@@ -4,8 +4,7 @@ import SwiftData
 @main
 struct RxCompoundingDocumentationApp: App {
     
-    @State private var user: User = MockData.makeUserJts()
-    @State private var appMode: AppMode = .prepare
+    @State private var currentUser: User?
 
     private let container: ModelContainer
     private let store: CompoundingStore
@@ -39,36 +38,47 @@ struct RxCompoundingDocumentationApp: App {
             SearchHistoryEntry.self,
             CachedNDCName.self
         ])
+        let configuration = ModelConfiguration(schema: schema)
 
         do {
-            container = try ModelContainer(for: schema)
-        } catch {
-            let fm = FileManager.default
-            if let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-                for suffix in ["", "-shm", "-wal"] {
-                    try? fm.removeItem(at: appSupport.appendingPathComponent("default.store\(suffix)"))
+                container = try ModelContainer(for: schema, configurations: configuration)
+            } catch {
+                print("ModelContainer creation failed: \(error)")
+                if let url = configuration.url as URL? {
+                    let fm = FileManager.default
+                    for suffix in ["", "-shm", "-wal"] {
+                        let fileURL = URL(fileURLWithPath: url.path + suffix)
+                        do {
+                            try fm.removeItem(at: fileURL)
+                        } catch {
+                            print("Failed to remove \(fileURL): \(error)")
+                        }
+                    }
+                }
+                do {
+                    container = try ModelContainer(for: schema, configurations: configuration)
+                } catch {
+                    fatalError("Could not create ModelContainer: \(error)")
                 }
             }
-            do {
-                container = try ModelContainer(for: schema)
-            } catch {
-                fatalError("Could not create ModelContainer: \(error)")
-            }
-        }
         store = CompoundingStore(modelContext: container.mainContext)
     }
 
     var body: some Scene {
         WindowGroup {
-            MainScene(store: store)
-                .modelContainer(container)
-                .environment(\.currentUser, user)
+            Group {
+                if let currentUser {
+                    MainScene(store: store) {
+                        self.currentUser = nil
+                    }
+                    .environment(\.currentUser, currentUser)
+                } else {
+                    LoginScene(store: store) { user in
+                        currentUser = user
+                    }
+                }
+            }
+            .modelContainer(container)
         }
     }
-}
-
-
-enum AppMode {
-    case prepare
-    case verify
 }

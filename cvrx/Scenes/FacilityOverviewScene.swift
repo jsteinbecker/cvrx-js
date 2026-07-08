@@ -59,32 +59,30 @@ struct FacilityOverviewScene: View {
     @State private var selectedFloorType: FloorType?
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let facility = selectedFacility ?? facilities.first {
-                    FacilityMapView(
-                        facility: facility,
-                        selectedFloorType: $selectedFloorType
-                    )
-                } else {
-                    ContentUnavailableView(
-                        "No facilities",
-                        systemImage: "building.2"
-                    )
-                }
+        Group {
+            if let facility = selectedFacility ?? facilities.first {
+                FacilityMapView(
+                    facility: facility,
+                    selectedFloorType: $selectedFloorType
+                )
+            } else {
+                ContentUnavailableView(
+                    "No facilities",
+                    systemImage: "building.2"
+                )
             }
-            .navigationTitle("Facilities")
-            .toolbar {
-                #if os(iOS)
-                ToolbarItem(placement: .topBarTrailing) {
-                    facilityPicker
-                }
-                #else
-                ToolbarItem {
-                    facilityPicker
-                }
-                #endif
+        }
+        .navigationTitle("Facilities")
+        .toolbar {
+            #if os(iOS)
+            ToolbarItem(placement: .topBarTrailing) {
+                facilityPicker
             }
+            #else
+            ToolbarItem {
+                facilityPicker
+            }
+            #endif
         }
     }
 
@@ -531,7 +529,7 @@ struct FloorDashboardCard: View {
     let floor: FloorUnit
     let namingRule: BedNamingRule
 
-    @State private var isExpanded = true
+    @State private var isExpanded = false
 
     private var census: CensusSummary {
         CensusSummary(floors: [floor])

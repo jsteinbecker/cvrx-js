@@ -6,15 +6,14 @@ enum MockData {
 
     // MARK: - Users
     //
-    // User is @Observable (reference type). Use factories so each caller gets
-    // a fresh User, letting the app root take ownership via @State.
+    // Use factories so each caller gets a fresh SwiftData User instance.
 
     static func makeUserJts() -> User {
-        User(username: "jts", deptId: "NCMC", name: "Josh Steinbecker", role: .hdcpht)
+        User(username: "jts", deptId: "NCMC", facilityID: "GH", name: "Josh Steinbecker", role: .hdcpht)
     }
 
     static func makeUserMsm() -> User {
-        User(username: "msm", deptId: "NCMC", name: "Molly Sweeney-McKeil", role: .rph)
+        User(username: "msm", deptId: "NCMC", facilityID: "GH", name: "Molly Sweeney-McKeil", role: .rph)
     }
 
     static let patientNames = [

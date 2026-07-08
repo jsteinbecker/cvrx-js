@@ -39,8 +39,8 @@ private func cached<T: Sendable>(_ key: String, produce: @escaping () async thro
 
 // MARK: - Seed resolution  (findRxcuiSeeds + approximateSeeds)
 
-private struct RxcuiResponse: Decodable {
-    struct IdGroup: Decodable { var rxnormId: [String]? }
+nonisolated private struct RxcuiResponse: Decodable {
+    nonisolated struct IdGroup: Decodable { var rxnormId: [String]? }
     var idGroup: IdGroup?
 }
 
@@ -52,9 +52,9 @@ func findRxcuiSeeds(_ q: String) async throws -> [String] {
     return resp.idGroup?.rxnormId ?? []
 }
 
-private struct ApproxResponse: Decodable {
-    struct Group: Decodable {
-        struct Candidate: Decodable { var rxcui: String? }
+nonisolated private struct ApproxResponse: Decodable {
+    nonisolated struct Group: Decodable {
+        nonisolated struct Candidate: Decodable { var rxcui: String? }
         var candidate: [Candidate]?
     }
     var approximateGroup: Group?
@@ -74,10 +74,10 @@ func approximateSeeds(_ q: String, maxEntries: Int = 20) async throws -> [String
 
 // MARK: - Related concepts  (gatherConcepts)
 
-private struct RelatedResponse: Decodable {
-    struct RelatedGroup: Decodable {
-        struct ConceptGroup: Decodable {
-            struct ConceptProperty: Decodable {
+nonisolated private struct RelatedResponse: Decodable {
+    nonisolated struct RelatedGroup: Decodable {
+        nonisolated struct ConceptGroup: Decodable {
+            nonisolated struct ConceptProperty: Decodable {
                 var rxcui: String
                 var name: String
             }
@@ -158,9 +158,9 @@ private func fetchRelated(rxcui: String, ttyParam: String, expand: String) async
 
 // MARK: - NDC fetching  (fetchNDCsDirect, fetchSCDsForForm, fetchSCDFsForGroup)
 
-private struct NDCResponse: Decodable {
-    struct NDCGroup: Decodable {
-        struct NDCList: Decodable { var ndc: [String]? }
+nonisolated private struct NDCResponse: Decodable {
+    nonisolated struct NDCGroup: Decodable {
+        nonisolated struct NDCList: Decodable { var ndc: [String]? }
         var ndcList: NDCList?
     }
     var ndcGroup: NDCGroup?
@@ -268,8 +268,8 @@ func poolNDCsDirect(concept: RxConcept, crossPop: Bool) async throws -> NDCResul
 
 // MARK: - NDC name lookup  (fetchNDCName)
 
-private struct NDCStatusResponse: Decodable {
-    struct NDCStatus: Decodable {
+nonisolated private struct NDCStatusResponse: Decodable {
+    nonisolated struct NDCStatus: Decodable {
         var conceptName: String?
         var status: String?
         var active: String?

@@ -36,6 +36,8 @@ final class SearchViewModel {
     // MARK: - Selected NDC for popover
 
     var selectedNDC: NDCInfo? = nil
+    var importSummary: String = ""
+    var importingNodeID: String?
 
     // MARK: - Search timer (mirrors debounce)
 
@@ -228,6 +230,71 @@ final class SearchViewModel {
         } catch {
             selectedNDC = NDCInfo(ndc: ndc)
         }
+    }
+
+    // MARK: - Product import
+
+    func importProduct(from node: ForestNode) {
+        guard let result = node.ndcResult else { return }
+        let ndcs = result.ndcs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard !ndcs.isEmpty else {
+            importSummary = "No NDCs available to import."
+            return
+        }
+        guard let ctx = modelContext else {
+            importSummary = "Product catalog is unavailable."
+            return
+        }
+
+        importingNodeID = node.id
+        Task { @MainActor in
+            defer { importingNodeID = nil }
+            do {
+                let descriptor = FetchDescriptor<Product>()
+                let products = try ctx.fetch(descriptor)
+                let incomingKeys = Set(ndcs.flatMap { ndcMatchKeys(for: $0) })
+                let existing = products.first { product in
+                    product.name.localizedCaseInsensitiveCompare(node.concept.name) == .orderedSame
+                        || !product.normalizedNDCMatchKeys.isDisjoint(with: incomingKeys)
+                }
+
+                let product = existing ?? Product(
+                    name: node.concept.name,
+                    linkedNDCs: [],
+                    importedRxCUI: node.concept.rxcui,
+                    importedTTY: node.concept.tty.rawValue,
+                    importedAt: .now,
+                    strength: 0,
+                    strengthUnit: .unitless
+                )
+
+                if existing == nil { ctx.insert(product) }
+                let before = product.linkedNDCs.count
+                product.linkedNDCs = mergedNDCs(existing: product.linkedNDCs, imported: ndcs)
+                product.importedRxCUI = node.concept.rxcui
+                product.importedTTY = node.concept.tty.rawValue
+                product.importedAt = .now
+
+                try ctx.save()
+                let added = product.linkedNDCs.count - before
+                let verb = existing == nil ? "Created" : "Updated"
+                importSummary = "\(verb) \(product.name) with \(product.linkedNDCs.count) NDCs (\(added) new)."
+            } catch {
+                importSummary = "Import failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func mergedNDCs(existing: [String], imported: [String]) -> [String] {
+        var seen = Set(existing.flatMap { ndcMatchKeys(for: $0) })
+        var merged = existing
+        for ndc in imported {
+            let keys = ndcMatchKeys(for: ndc)
+            guard seen.isDisjoint(with: keys) else { continue }
+            merged.append(ndc)
+            seen.formUnion(keys)
+        }
+        return merged.sorted()
     }
 
     // MARK: - History

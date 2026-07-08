@@ -26,10 +26,73 @@ struct CompoundingScene: View {
 
     @State private var isCapturing = false
     @State private var captureTask: Task<Void, Never>?
+    @State private var lockRefreshTask: Task<Void, Never>?
+    @State private var ownsSceneAcquiredLock = false
 
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        content
+            .navigationTitle("Capture")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Done") { dismiss() }
+                        .bold()
+                }
+            }
+            .task {
+                await acquireLockAndStartCamera()
+            }
+            .onDisappear {
+                tearDownScene()
+            }
+            .sheet(isPresented: $showRecipeSheet) {
+                recipeSheet
+            }
+            .sheet(isPresented: $showGridSheet) {
+                capturedGridSheet
+            }
+            .confirmationDialog(
+                "Upload Image",
+                isPresented: $showUploadSelector,
+                titleVisibility: .visible
+            ) {
+                uploadSourceButtons
+            }
+            .photosPicker(
+                isPresented: $showPhotoPicker,
+                selection: $pickedPhotoItem,
+                matching: .images,
+                photoLibrary: .shared()
+            )
+            .onChange(of: pickedPhotoItem) { _, newItem in
+                guard let newItem else { return }
+                handlePickedPhotoItem(newItem, kind: uploadKindForPicker)
+            }
+            .fileImporter(
+                isPresented: $showFileImporter,
+                allowedContentTypes: [.image, .jpeg, .png, .heic],
+                allowsMultipleSelection: false
+            ) { result in
+                handleFileImporterResult(result, kind: uploadKindForPicker)
+            }
+            .alert(
+                "Upload Failed",
+                isPresented: Binding(
+                    get: { uploadErrorMessage != nil },
+                    set: { if !$0 { uploadErrorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { uploadErrorMessage = nil }
+            } message: {
+                Text(uploadErrorMessage ?? "")
+            }
+    }
+
+    private var content: some View {
         ZStack {
             CameraPreview(session: camera.session)
                 .ignoresSafeArea()
@@ -60,6 +123,7 @@ struct CompoundingScene: View {
                     onGrid: { showGridSheet = true },
                     onUploadImage: { showUploadSelector = true }
                 )
+                .disabled(!canEditOrder)
                 .padding(.horizontal)
                 .padding(.bottom, 12)
             }
@@ -70,114 +134,163 @@ struct CompoundingScene: View {
                     .padding(20)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
             }
-        }
-        .navigationTitle("Capture")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("Done") { dismiss() }
-                    .bold()
+
+            if order.isLockedByOther(than: user) {
+                Color.white.opacity(0.55).ignoresSafeArea()
+                LockedOrderOverlay(order: order, onBreakLock: breakLock)
+                    .padding(24)
             }
-        }
-        .task {
-            store.beginPreparing(orderID: order.id)
-            do {
-                try await camera.configure()
-                camera.start()
-            } catch {
-                cameraErrorMessage = error.localizedDescription
-            }
-        }
-        .onDisappear {
-            captureTask?.cancel()
-            camera.stop()
-        }
-        .sheet(isPresented: $showRecipeSheet) {
-            RecipeStepsSheet(order: order, store: store)
-                .presentationDetents([.medium, .large])
-        }
-        .sheet(isPresented: $showGridSheet) {
-            CapturedGridSheet(
-                captures: order.captures,
-                order: order,
-                currentUser: user,
-                onDeleteCapture: { capture in
-                    store.deleteCapture(orderID: order.id, captureID: capture.id)
-                },
-                onAddPreparerPin: { capture, x, y, note in
-                    store.addPreparerFlag(orderID: order.id, captureID: capture.id,
-                                          x: x, y: y, note: note, createdBy: user!)
-                },
-                onRemovePreparerPin: { capture, flag in
-                    store.removePreparerFlag(orderID: order.id, captureID: capture.id, flagID: flag.id)
-                }
-            )
-            .presentationDetents([.medium, .large])
-        }
-        // MARK: Upload entry point — choose kind + source
-        .confirmationDialog(
-            "Upload Image",
-            isPresented: $showUploadSelector,
-            titleVisibility: .visible
-        ) {
-            Button("Reference — Camera Roll") {
-                uploadKindForPicker = .reference
-                showPhotoPicker = true
-            }
-            Button("Reference — Files") {
-                uploadKindForPicker = .reference
-                showFileImporter = true
-            }
-            Button("Aux — Camera Roll") {
-                uploadKindForPicker = .auxiliary
-                showPhotoPicker = true
-            }
-            Button("Aux — Files") {
-                uploadKindForPicker = .auxiliary
-                showFileImporter = true
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-        // MARK: Camera Roll picker
-        .photosPicker(
-            isPresented: $showPhotoPicker,
-            selection: $pickedPhotoItem,
-            matching: .images,
-            photoLibrary: .shared()
-        )
-        .onChange(of: pickedPhotoItem) { _, newItem in
-            guard let newItem else { return }
-            handlePickedPhotoItem(newItem, kind: uploadKindForPicker)
-        }
-        // MARK: Finder / Files picker
-        .fileImporter(
-            isPresented: $showFileImporter,
-            allowedContentTypes: [.image, .jpeg, .png, .heic],
-            allowsMultipleSelection: false
-        ) { result in
-            handleFileImporterResult(result, kind: uploadKindForPicker)
-        }
-        .alert(
-            "Upload Failed",
-            isPresented: Binding(
-                get: { uploadErrorMessage != nil },
-                set: { if !$0 { uploadErrorMessage = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) { uploadErrorMessage = nil }
-        } message: {
-            Text(uploadErrorMessage ?? "")
         }
     }
 
-    // MARK: - Capture (unchanged)
+    private var recipeSheet: some View {
+        RecipeStepsSheet(order: order, store: store, currentUser: user, canMutate: canEditOrder)
+            .presentationDetents([.medium, .large])
+    }
+
+    private var capturedGridSheet: some View {
+        CapturedGridSheet(
+            captures: order.captures,
+            order: order,
+            currentUser: user,
+            canMutate: canEditOrder,
+            onDeleteCapture: deleteCapture,
+            onAddPreparerPin: addPreparerPinAction,
+            onRemovePreparerPin: removePreparerPinAction
+        )
+        .presentationDetents([.medium, .large])
+    }
+
+    private var addPreparerPinAction: ((CompoundCapture, Double, Double, String?) -> Void)? {
+        guard canEditOrder else { return nil }
+        return { capture, x, y, note in
+            addPreparerPin(capture: capture, x: x, y: y, note: note)
+        }
+    }
+
+    private var removePreparerPinAction: ((CompoundCapture, CaptureFlag) -> Void)? {
+        { capture, flag in
+            removePreparerPin(capture: capture, flag: flag)
+        }
+    }
+
+    @ViewBuilder
+    private var uploadSourceButtons: some View {
+        Button("Reference — Camera Roll") {
+            uploadKindForPicker = .reference
+            showPhotoPicker = true
+        }
+        Button("Reference — Files") {
+            uploadKindForPicker = .reference
+            showFileImporter = true
+        }
+        Button("Aux — Camera Roll") {
+            uploadKindForPicker = .auxiliary
+            showPhotoPicker = true
+        }
+        Button("Aux — Files") {
+            uploadKindForPicker = .auxiliary
+            showFileImporter = true
+        }
+        Button("Cancel", role: .cancel) {}
+    }
+
+    private var canEditOrder: Bool {
+        guard order.captureMutationsAllowed else { return false }
+        return order.isLocked(by: user)
+    }
+
+    private func acquireLockAndStartCamera() async {
+        acquireLockIfPossible()
+        if let user, canEditOrder {
+            store.beginPreparing(orderID: order.id, by: user)
+        }
+        do {
+            try await camera.configure()
+            camera.start()
+        } catch {
+            cameraErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func tearDownScene() {
+        captureTask?.cancel()
+        stopLockRefresh()
+        if ownsSceneAcquiredLock, let user {
+            store.releaseOrderLock(orderID: order.id, by: user)
+        }
+        camera.stop()
+    }
+
+    private func deleteCapture(_ capture: CompoundCapture) {
+        guard let user, canEditOrder else { return }
+        store.deleteCapture(orderID: order.id, captureID: capture.id, deletedBy: user)
+    }
+
+    private func removePreparerPin(capture: CompoundCapture, flag: CaptureFlag) {
+        guard let user, canEditOrder else { return }
+        store.removePreparerFlag(orderID: order.id, captureID: capture.id, flagID: flag.id, removedBy: user)
+    }
+
+    private func acquireLockIfPossible() {
+        guard let user, order.captureMutationsAllowed else { return }
+        let alreadyOwned = order.isLocked(by: user)
+        guard store.acquireOrderLock(orderID: order.id, by: user) else { return }
+        ownsSceneAcquiredLock = !alreadyOwned
+        startLockRefresh()
+    }
+
+    private func breakLock() {
+        guard let user else { return }
+        guard store.acquireOrderLock(orderID: order.id, by: user, breakingExisting: true) else { return }
+        ownsSceneAcquiredLock = true
+        startLockRefresh()
+    }
+
+    private func startLockRefresh() {
+        guard let user else { return }
+        stopLockRefresh()
+        lockRefreshTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                guard !Task.isCancelled else { return }
+                store.refreshOrderLock(orderID: order.id, by: user)
+            }
+        }
+    }
+
+    private func stopLockRefresh() {
+        lockRefreshTask?.cancel()
+        lockRefreshTask = nil
+    }
+
+    // MARK: - Capture
+
+    private func addPreparerPin(
+        capture: CompoundCapture,
+        x: Double,
+        y: Double,
+        note: String?
+    ) {
+        guard let user, canEditOrder else {
+            cameraErrorMessage = "No signed-in user or active lock — cannot add a pin."
+            return
+        }
+
+        store.addPreparerFlag(
+            orderID: order.id,
+            captureID: capture.id,
+            x: x,
+            y: y,
+            note: note,
+            createdBy: user
+        )
+    }
 
     private func capture(_ kind: CaptureKind) {
         guard !isCapturing else { return }
-        guard let user else {
-            cameraErrorMessage = "No signed-in user — cannot record capture."
+        guard let user, canEditOrder else {
+            cameraErrorMessage = "No signed-in user or active lock — cannot record capture."
             return
         }
 
@@ -217,7 +330,8 @@ struct CompoundingScene: View {
         guard kind == .reference else { return }
         let next = order.currentStepIndex + 1
         guard next < order.totalStepCount else { return }
-        store.setCurrentStep(orderID: order.id, stepIndex: next)
+        guard let user, canEditOrder else { return }
+        store.setCurrentStep(orderID: order.id, stepIndex: next, changedBy: user)
     }
 
     private func captureFeedback(success: Bool) {
@@ -232,8 +346,8 @@ struct CompoundingScene: View {
     /// Loads image data from a PhotosPicker selection, writes it to the same
     /// on-disk location scheme the camera uses, and records it as a capture.
     private func handlePickedPhotoItem(_ item: PhotosPickerItem, kind: CaptureKind) {
-        guard let user else {
-            uploadErrorMessage = "No signed-in user — cannot record upload."
+        guard let user, canEditOrder else {
+            uploadErrorMessage = "No signed-in user or active lock — cannot record upload."
             pickedPhotoItem = nil
             return
         }
@@ -279,8 +393,8 @@ struct CompoundingScene: View {
     /// security-scoped resource access since the file may live outside the
     /// app's sandbox (iCloud Drive, external volumes, etc).
     private func handleFileImporterResult(_ result: Result<[URL], Error>, kind: CaptureKind) {
-        guard let user else {
-            uploadErrorMessage = "No signed-in user — cannot record upload."
+        guard let user, canEditOrder else {
+            uploadErrorMessage = "No signed-in user or active lock — cannot record upload."
             return
         }
 
@@ -464,6 +578,8 @@ struct CircleIconButton: View {
 struct RecipeStepsSheet: View {
     let order: CSPOrder
     let store: CompoundingStore
+    let currentUser: User?
+    var canMutate: Bool = true
 
     @Environment(\.dismiss) private var dismiss
 
@@ -472,28 +588,22 @@ struct RecipeStepsSheet: View {
             List {
                 ForEach(Array(order.recipeSteps.enumerated()), id: \.offset) { idx, step in
                     Button {
-                        store.setCurrentStep(orderID: order.id, stepIndex: idx)
+                        guard let currentUser, canMutate else { return }
+                        store.setCurrentStep(orderID: order.id, stepIndex: idx, changedBy: currentUser)
                         dismiss()
                     } label: {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: idx == order.currentStepIndex
-                                  ? "largecircle.fill.circle"
-                                  : "circle")
-                                .foregroundStyle(idx == order.currentStepIndex ? Color.accentColor : .secondary)
-                                .padding(.top, 2)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Step \(idx + 1)")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                Text(step)
-                                    .font(.body)
-                                    .foregroundStyle(.primary)
-                            }
-                            Spacer()
-                        }
-                        .padding(.vertical, 4)
+                        RecipeStepRow(
+                            index: idx,
+                            text: step,
+                            isCurrent: idx == order.currentStepIndex,
+                            accessory: .selectionIcon,
+                            textFont: .body,
+                            horizontalPadding: nil,
+                            verticalPadding: 4
+                        )
                     }
                     .buttonStyle(.plain)
+                    .disabled(!canMutate)
                 }
             }
             .navigationTitle("Recipe")
@@ -513,6 +623,7 @@ struct CapturedGridSheet: View {
     let captures: [CompoundCapture]
     let order: CSPOrder
     var currentUser: User? = nil
+    var canMutate: Bool = true
     let onDeleteCapture: (CompoundCapture) -> Void
     var onAddPreparerPin: ((CompoundCapture, Double, Double, String?) -> Void)? = nil
     var onRemovePreparerPin: ((CompoundCapture, CaptureFlag) -> Void)? = nil
@@ -562,16 +673,16 @@ struct CapturedGridSheet: View {
                 CaptureViewerSheet(
                     capture: capture,
                     badge: order.badge(for: capture),
-                    canDelete: order.captureMutationsAllowed,
+                    canDelete: canMutate,
                     onDelete: {
                         onDeleteCapture(capture)
                         viewer = nil
                     },
                     currentUser: currentUser,
-                    onAddPreparerPin: order.captureMutationsAllowed ? { x, y, note in
+                    onAddPreparerPin: canMutate ? { x, y, note in
                         onAddPreparerPin?(capture, x, y, note)
                     } : nil,
-                    onRemovePreparerPin: order.captureMutationsAllowed ? { flag in
+                    onRemovePreparerPin: canMutate ? { flag in
                         onRemovePreparerPin?(capture, flag)
                     } : nil
                 )

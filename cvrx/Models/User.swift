@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SwiftData
 import SwiftUI
@@ -9,6 +10,8 @@ final class User {
 
     var username: String
     var deptId: String
+    var facilityID: String
+    var passwordHash: String
     var name: String
     var role: UserRole
     var active: Bool
@@ -17,6 +20,9 @@ final class User {
         id: UUID = UUID(),
         username: String,
         deptId: String,
+        facilityID: String? = nil,
+        password: String = "password",
+        passwordHash: String? = nil,
         name: String,
         role: UserRole,
         active: Bool = true
@@ -24,9 +30,25 @@ final class User {
         self.id = id
         self.username = username
         self.deptId = deptId
+        self.facilityID = facilityID ?? deptId
+        self.passwordHash = passwordHash ?? User.passwordHash(for: password)
         self.name = name
         self.role = role
         self.active = active
+    }
+
+    static func passwordHash(for password: String) -> String {
+        let data = Data(password.utf8)
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    func passwordMatches(_ password: String) -> Bool {
+        passwordHash == User.passwordHash(for: password)
+    }
+
+    func matchesFacilityID(_ candidate: String) -> Bool {
+        facilityID.normalizedLoginValue == candidate.normalizedLoginValue
     }
 }
 
@@ -37,6 +59,8 @@ extension User: Codable {
         case id
         case username
         case deptId
+        case facilityID
+        case passwordHash
         case name
         case role
         case active
@@ -44,10 +68,13 @@ extension User: Codable {
 
     convenience init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let deptId = try container.decode(String.self, forKey: .deptId)
         self.init(
             id: try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
             username: try container.decode(String.self, forKey: .username),
-            deptId: try container.decode(String.self, forKey: .deptId),
+            deptId: deptId,
+            facilityID: try container.decodeIfPresent(String.self, forKey: .facilityID) ?? deptId,
+            passwordHash: try container.decodeIfPresent(String.self, forKey: .passwordHash),
             name: try container.decode(String.self, forKey: .name),
             role: try container.decode(UserRole.self, forKey: .role),
             active: try container.decodeIfPresent(Bool.self, forKey: .active) ?? true
@@ -60,9 +87,19 @@ extension User: Codable {
         try container.encode(id, forKey: .id)
         try container.encode(username, forKey: .username)
         try container.encode(deptId, forKey: .deptId)
+        try container.encode(facilityID, forKey: .facilityID)
+        try container.encode(passwordHash, forKey: .passwordHash)
         try container.encode(name, forKey: .name)
         try container.encode(role, forKey: .role)
         try container.encode(active, forKey: .active)
+    }
+}
+
+// MARK: - Login Helpers
+
+extension String {
+    var normalizedLoginValue: String {
+        trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
 

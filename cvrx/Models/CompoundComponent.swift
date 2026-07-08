@@ -68,6 +68,9 @@ final class Product {
     @Attribute(.unique) var id: UUID
     var name: String
     var linkedNDCs: [String]
+    var importedRxCUI: String?
+    var importedTTY: String?
+    var importedAt: Date?
     /// Labeled strength of the product (e.g. 50 for "50 mg/mL" or "500 mg vial").
     var strength: Double
     var strengthUnit: QuantityUnit
@@ -82,6 +85,9 @@ final class Product {
         id: UUID = UUID(),
         name: String,
         linkedNDCs: [String] = [],
+        importedRxCUI: String? = nil,
+        importedTTY: String? = nil,
+        importedAt: Date? = nil,
         strength: Double,
         strengthUnit: QuantityUnit,
         mlConcentration: Double? = nil
@@ -89,10 +95,59 @@ final class Product {
         self.id = id
         self.name = name
         self.linkedNDCs = linkedNDCs
+        self.importedRxCUI = importedRxCUI
+        self.importedTTY = importedTTY
+        self.importedAt = importedAt
         self.strength = strength
         self.strengthUnit = strengthUnit
         self.mlConcentration = mlConcentration
     }
+
+    var normalizedNDCMatchKeys: Set<String> {
+        Set(linkedNDCs.flatMap { ndcMatchKeys(for: $0) })
+    }
+
+    func allowsBarcode(_ barcode: String) -> Bool {
+        !normalizedNDCMatchKeys.isDisjoint(with: barcodeMatchKeys(for: barcode))
+    }
+}
+
+func ndcMatchKeys(for value: String) -> Set<String> {
+    let digits = value.filter(\.isNumber)
+    guard !digits.isEmpty else { return [] }
+
+    var keys: Set<String> = [digits]
+    let parts = value.split(separator: "-").map { String($0.filter(\.isNumber)) }
+    if parts.count == 3 {
+        switch parts.map(\.count) {
+        case [4, 4, 2]: keys.insert("0" + parts.joined())
+        case [5, 3, 2]: keys.insert(parts[0] + "0" + parts[1] + parts[2])
+        case [5, 4, 1]: keys.insert(parts[0] + parts[1] + "0" + parts[2])
+        default: break
+        }
+    }
+
+    if digits.count == 11 { keys.insert(digits) }
+    return keys
+}
+
+func barcodeMatchKeys(for value: String) -> Set<String> {
+    let digits = value.filter(\.isNumber)
+    guard !digits.isEmpty else { return [] }
+
+    var keys: Set<String> = [digits]
+    if digits.count >= 11 { keys.insert(String(digits.suffix(11))) }
+    if digits.count >= 10 { keys.insert(String(digits.suffix(10))) }
+
+    for keyLength in [11, 10] where digits.count > keyLength {
+        for start in 0...(digits.count - keyLength) {
+            let lower = digits.index(digits.startIndex, offsetBy: start)
+            let upper = digits.index(lower, offsetBy: keyLength)
+            keys.insert(String(digits[lower..<upper]))
+        }
+    }
+
+    return keys
 }
 
 // MARK: - Scan Override Record

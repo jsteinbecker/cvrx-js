@@ -11,10 +11,47 @@ final class CompoundingStore {
     }
 
     private func seedIfNeeded() {
+        seedOrdersIfNeeded()
+        seedFacilityIfNeeded()
+        seedUsersIfNeeded()
+    }
+
+    private func seedOrdersIfNeeded() {
         let descriptor = FetchDescriptor<CSPOrder>()
         guard (try? modelContext.fetchCount(descriptor)) == 0 else { return }
         MockData.makeSampleOrders(into: modelContext)
+    }
+
+    private func seedFacilityIfNeeded() {
+        let descriptor = FetchDescriptor<Facility>()
+        guard (try? modelContext.fetchCount(descriptor)) == 0 else { return }
         MockData.makeFacility(into: modelContext)
+    }
+
+    private func seedUsersIfNeeded() {
+        let descriptor = FetchDescriptor<User>()
+        guard (try? modelContext.fetchCount(descriptor)) == 0 else { return }
+        modelContext.insert(MockData.makeUserJts())
+        modelContext.insert(MockData.makeUserMsm())
+        try? modelContext.save()
+    }
+
+    func authenticateUser(username: String, password: String, facilityID: String) -> User? {
+        let normalizedUsername = username.normalizedLoginValue
+        guard !normalizedUsername.isEmpty,
+              !password.isEmpty,
+              !facilityID.normalizedLoginValue.isEmpty
+        else { return nil }
+
+        let descriptor = FetchDescriptor<User>()
+        guard let users = try? modelContext.fetch(descriptor) else { return nil }
+
+        return users.first { user in
+            user.active
+            && user.username.normalizedLoginValue == normalizedUsername
+            && user.matchesFacilityID(facilityID)
+            && user.passwordMatches(password)
+        }
     }
 
     private func order(for id: CSPOrder.ID) -> CSPOrder? {
@@ -33,6 +70,35 @@ final class CompoundingStore {
         return try? modelContext.fetch(descriptor).first
     }
 
+    private func mutationsAllowed(on order: CSPOrder, by user: User) -> Bool {
+        !order.isLockedByOther(than: user)
+    }
+
+    @discardableResult
+    func acquireOrderLock(orderID: CSPOrder.ID, by user: User, breakingExisting: Bool = false) -> Bool {
+        guard let order = order(for: orderID) else { return false }
+        guard breakingExisting || !order.isLockedByOther(than: user) else { return false }
+
+        order.activeEditorID = user.id
+        order.activeEditorUsername = user.username
+        order.activeEditorName = user.name
+        order.activeEditorLastSeenAt = Date.now
+        return true
+    }
+
+    func refreshOrderLock(orderID: CSPOrder.ID, by user: User) {
+        guard let order = order(for: orderID), order.isLocked(by: user) else { return }
+        order.activeEditorLastSeenAt = Date.now
+    }
+
+    func releaseOrderLock(orderID: CSPOrder.ID, by user: User) {
+        guard let order = order(for: orderID), order.isLocked(by: user) else { return }
+        order.activeEditorID = nil
+        order.activeEditorUsername = nil
+        order.activeEditorName = nil
+        order.activeEditorLastSeenAt = nil
+    }
+
     // MARK: - Lot Entry
 
     func processBarcodeScan(
@@ -47,6 +113,7 @@ final class CompoundingStore {
     ) {
         guard scannedBy.role.canScan else { return }
         guard let order = order(for: orderID),
+              mutationsAllowed(on: order, by: scannedBy),
               let componentIndex = order.components.firstIndex(where: { $0.id == componentID })
         else { return }
 
@@ -89,6 +156,7 @@ final class CompoundingStore {
     ) {
         guard enteredBy.role.canScan else { return }
         guard let order = order(for: orderID),
+              mutationsAllowed(on: order, by: enteredBy),
               let componentIndex = order.components.firstIndex(where: { $0.id == componentID })
         else { return }
 
@@ -128,6 +196,7 @@ final class CompoundingStore {
     ) {
         guard correctedBy.role.canOverrideScan else { return }
         guard let order = order(for: orderID),
+              mutationsAllowed(on: order, by: correctedBy),
               let componentIndex = order.components.firstIndex(where: { $0.id == componentID }),
               let lotIndex = order.components[componentIndex].utilizedLots.firstIndex(where: { $0.id == lotID })
         else { return }
@@ -210,9 +279,11 @@ final class CompoundingStore {
     func removeLot(
         orderID: CSPOrder.ID,
         componentID: CompoundComponent.ID,
-        lotID: CompoundUtilizedLot.ID
+        lotID: CompoundUtilizedLot.ID,
+        removedBy user: User
     ) {
         guard let order = order(for: orderID),
+              mutationsAllowed(on: order, by: user),
               let componentIndex = order.components.firstIndex(where: { $0.id == componentID })
         else { return }
 
@@ -228,7 +299,7 @@ final class CompoundingStore {
         capturedBy: User
     ) {
         guard capturedBy.role.canRemediate else { return }
-        guard let order = order(for: orderID) else { return }
+        guard let order = order(for: orderID), mutationsAllowed(on: order, by: capturedBy) else { return }
 
         let capture = CompoundCapture(
             cspOrder: order,
@@ -258,9 +329,9 @@ final class CompoundingStore {
     }
 
     @discardableResult
-    func deleteCapture(orderID: CSPOrder.ID, captureID: CompoundCapture.ID) -> Bool {
+    func deleteCapture(orderID: CSPOrder.ID, captureID: CompoundCapture.ID, deletedBy user: User) -> Bool {
         guard let order = order(for: orderID) else { return false }
-        guard order.captureMutationsAllowed else { return false }
+        guard order.captureMutationsAllowed, mutationsAllowed(on: order, by: user) else { return false }
 
         order.captures.removeAll { $0.id == captureID }
 
@@ -280,6 +351,7 @@ final class CompoundingStore {
         createdBy: User
     ) {
         guard let order = order(for: orderID),
+              mutationsAllowed(on: order, by: createdBy),
               let captureIndex = order.captures.firstIndex(where: { $0.id == captureID })
         else { return }
 
@@ -290,45 +362,48 @@ final class CompoundingStore {
     func removePreparerFlag(
         orderID: CSPOrder.ID,
         captureID: CompoundCapture.ID,
-        flagID: CaptureFlag.ID
+        flagID: CaptureFlag.ID,
+        removedBy user: User
     ) {
         guard let order = order(for: orderID),
+              mutationsAllowed(on: order, by: user),
               let captureIndex = order.captures.firstIndex(where: { $0.id == captureID })
         else { return }
 
         order.captures[captureIndex].preparerFlags.removeAll { $0.id == flagID }
     }
 
-    func setCurrentStep(orderID: CSPOrder.ID, stepIndex: Int) {
-        guard let order = order(for: orderID) else { return }
+    func setCurrentStep(orderID: CSPOrder.ID, stepIndex: Int, changedBy user: User) {
+        guard let order = order(for: orderID), mutationsAllowed(on: order, by: user) else { return }
         let total = order.recipeSteps.count
         guard total > 0 else { return }
         order.currentStepIndex = min(max(stepIndex, 0), total - 1)
     }
 
-    func advanceStep(orderID: CSPOrder.ID) {
-        guard let order = order(for: orderID) else { return }
+    func advanceStep(orderID: CSPOrder.ID, changedBy user: User) {
+        guard let order = order(for: orderID), mutationsAllowed(on: order, by: user) else { return }
         let total = order.recipeSteps.count
         guard total > 0 else { return }
         order.currentStepIndex = min(order.currentStepIndex + 1, total - 1)
     }
 
-    func previousStep(orderID: CSPOrder.ID) {
-        guard let order = order(for: orderID) else { return }
+    func previousStep(orderID: CSPOrder.ID, changedBy user: User) {
+        guard let order = order(for: orderID), mutationsAllowed(on: order, by: user) else { return }
         order.currentStepIndex = max(order.currentStepIndex - 1, 0)
     }
 
-    func beginPreparing(orderID: CSPOrder.ID) {
-        guard let order = order(for: orderID) else { return }
+    func beginPreparing(orderID: CSPOrder.ID, by user: User) {
+        guard let order = order(for: orderID), mutationsAllowed(on: order, by: user) else { return }
         guard [.pending, .staging].contains(order.status) else { return }
         order.status = .preparing
     }
 
     // MARK: - Verification
 
-    func markReadyForVerification(orderID: CSPOrder.ID) {
-        guard let order = order(for: orderID) else { return }
+    func markReadyForVerification(orderID: CSPOrder.ID, by user: User) {
+        guard let order = order(for: orderID), mutationsAllowed(on: order, by: user) else { return }
         order.status = .waitingForApproval
+        releaseOrderLock(orderID: orderID, by: user)
     }
 
     func verify(
@@ -437,6 +512,7 @@ final class CompoundingStore {
     ) {
         guard madeBy.role.canRemediate else { return }
         guard let order = order(for: orderID),
+              mutationsAllowed(on: order, by: madeBy),
               let remediation = order.remediation
         else { return }
 
@@ -456,6 +532,7 @@ final class CompoundingStore {
     func completeRemediation(orderID: CSPOrder.ID, completedBy: User) {
         guard completedBy.role.canRemediate else { return }
         guard let order = order(for: orderID),
+              mutationsAllowed(on: order, by: completedBy),
               let remediation = order.remediation
         else { return }
 

@@ -1,0 +1,6 @@
+Todos:
+    LotCards:
+        - Match styling among all form fields in LotCards
+    CaptureFlag:
+        - Display CaptureFlag note upon hovering/tapping.
+        - Make the note filed for entering CaptureFlag notes not stretch and alter the layout as it appears/leaves

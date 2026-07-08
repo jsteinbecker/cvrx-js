@@ -1,6 +1,6 @@
 import Foundation
 
-enum OrderStatus: String, CaseIterable, Hashable, Codable {
+enum OrderStatus: String, CaseIterable, Hashable {
     case pending = "Pending"
     case staging = "Staging"
     case preparing = "Preparing"
@@ -8,7 +8,9 @@ enum OrderStatus: String, CaseIterable, Hashable, Codable {
     case remediation = "Remediation"
     case approved = "Approved"
     case rejected = "Rejected"
+}
 
+extension OrderStatus: @nonisolated Codable {
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
 

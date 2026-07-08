@@ -49,6 +49,9 @@ struct PinnableImageCard: View {
     var onAddPin: ((Double, Double) -> Void)? = nil
     var onRemovePin: ((CaptureFlag) -> Void)? = nil
 
+    @State private var activeNotePinID: UUID? = nil
+    @State private var hoveredNotePinID: UUID? = nil
+
     var body: some View {
         imageContent
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -76,15 +79,37 @@ struct PinnableImageCard: View {
                             }
 
                         ForEach(pins) { pin in
-                            PinMarker(number: numbering[pin.id] ?? 0, color: pinColor)
-                                .position(
-                                    x: CGFloat(pin.x) * geo.size.width,
-                                    y: CGFloat(pin.y) * geo.size.height
-                                )
-                                .onTapGesture {
-                                    onRemovePin?(pin)
+                            let note = displayNote(for: pin)
+                            let isShowingNote = activeNotePinID == pin.id || hoveredNotePinID == pin.id
+
+                            ZStack {
+                                PinMarker(number: numbering[pin.id] ?? 0, color: pinColor)
+
+                                if isShowingNote, let note {
+                                    PinNoteCallout(note: note)
+                                        .offset(y: -48)
+                                        .allowsHitTesting(false)
+                                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
                                 }
-                                .allowsHitTesting(onRemovePin != nil)
+                            }
+                            .position(
+                                x: CGFloat(pin.x) * geo.size.width,
+                                y: CGFloat(pin.y) * geo.size.height
+                            )
+                            .onHover { isHovering in
+                                hoveredNotePinID = isHovering ? pin.id : nil
+                            }
+                            .help(note ?? "Pin \(numbering[pin.id] ?? 0)")
+                            .onTapGesture {
+                                if let onRemovePin {
+                                    onRemovePin(pin)
+                                } else if note != nil {
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        activeNotePinID = activeNotePinID == pin.id ? nil : pin.id
+                                    }
+                                }
+                            }
+                            .allowsHitTesting(onRemovePin != nil || note != nil)
                         }
                     }
                 }
@@ -115,16 +140,14 @@ struct PinnableImageCard: View {
         }
     }
 
+    private func displayNote(for pin: CaptureFlag) -> String? {
+        let note = pin.note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return note.isEmpty ? nil : note
+    }
+
     private var placeholder: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "photo")
-                .font(.system(size: 48))
-                .foregroundStyle(.tertiary)
-            Text("No image available")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ImageUnavailablePlaceholder()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -211,17 +234,11 @@ struct RemediationComposerSheet: View {
     // MARK: subviews
 
     private var instructionsBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "hand.tap.fill")
-                .foregroundStyle(.purple)
-            Text("Tap the image to pin a problem. Tap a pin to remove it.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color.purple.opacity(0.08))
+        InstructionBar(
+            systemImage: "hand.tap.fill",
+            text: "Tap the image to pin a problem. Tap a pin to remove it.",
+            tone: .purple
+        )
     }
 
     private var carousel: some View {
@@ -232,8 +249,16 @@ struct RemediationComposerSheet: View {
                     pins: pinsForCurrent(captureID: capture.id),
                     numbering: globalNumbering,
                     onAddPin: { x, y in
-                        flags.append(CaptureFlag(captureID: capture.id,
-                                                 x: x, y: y, createdBy: user!, note: ""))
+                        guard let user else { return }
+                        flags.append(
+                            CaptureFlag(
+                                captureID: capture.id,
+                                x: x,
+                                y: y,
+                                createdBy: user,
+                                note: ""
+                            )
+                        )
                     },
                     onRemovePin: { pin in
                         flags.removeAll { $0.id == pin.id }
@@ -256,13 +281,14 @@ struct RemediationComposerSheet: View {
             Spacer()
 
             if !flags.isEmpty {
-                Label("\(flags.count) pin\(flags.count == 1 ? "" : "s")",
-                      systemImage: "mappin.and.ellipse")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.purple)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(Color.purple.opacity(0.12)))
+                PillLabel(
+                    text: "\(flags.count) pin\(flags.count == 1 ? "" : "s")",
+                    systemImage: "mappin.and.ellipse",
+                    tone: .purple,
+                    font: .caption.weight(.bold),
+                    verticalPadding: 3,
+                    backgroundOpacity: 0.12
+                )
             }
         }
         .padding(.horizontal, 16)
@@ -280,13 +306,9 @@ struct RemediationComposerSheet: View {
                       text: $reason, axis: .vertical)
                 .lineLimit(2...4)
                 .padding(10)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.rxGroupedBackground)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+                .roundedPanel(
+                    fill: Color.rxGroupedBackground,
+                    borderColor: Color.primary.opacity(0.1)
                 )
         }
         .padding(16)

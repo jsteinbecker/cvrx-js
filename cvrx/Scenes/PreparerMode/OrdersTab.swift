@@ -8,7 +8,6 @@ struct OrdersTab: View {
 
     @Environment(\.currentUser) private var user
     @State private var selection: SidebarSelection? = .status(.pending)
-    @State private var showingAddLabelersSheet = false
 
     @Query(sort: \CSPOrder.dueTime)
     private var orders: [CSPOrder]
@@ -60,25 +59,7 @@ struct OrdersTab: View {
             }
             .toolbar {
                 ToolbarItem(placement: .automatic) {
-                    HStack {
-                        Image(systemName: "person.crop.circle.badge.checkmark", variableValue: 1.00)
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(Color.green, Color.white, Color.gray)
-                            .font(.system(size: 16, weight: .regular))
-                        Text(user!.name)
-                    }
-                }
-
-                ToolbarItem(placement: .automatic) {
-                    Button {
-                        showingAddLabelersSheet = true
-                    } label: {
-                        Image(systemName: "link", variableValue: 1.00)
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(Color.gray, Color.white, Color.gray)
-                            .font(.system(size: 16, weight: .regular))
-                    }
-                    .buttonStyle(.plain)
+                    CurrentUserBadge(user: user)
                 }
             }
         } detail: {
@@ -96,9 +77,6 @@ struct OrdersTab: View {
                         systemImage: "sidebar.left"
                     )
             }
-        }
-        .sheet(isPresented: $showingAddLabelersSheet) {
-            AddLabelersSheet()
         }
     }
 
@@ -217,24 +195,16 @@ private enum SidebarExtra: String, CaseIterable, Identifiable {
 }
 
 struct Badge: View {
-    @State private var text: String
-    @State private var color: Color
+    let text: String
+    let color: Color
 
     init(text: String = "Badge", color: Color = .accentColor) {
-        _text = State(initialValue: text)
-        _color = State(initialValue: color)
+        self.text = text
+        self.color = color
     }
 
     var body: some View {
-        Text(text)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(color.opacity(0.15))
-            )
+        PillLabel(text: text, tone: color)
     }
 }
 

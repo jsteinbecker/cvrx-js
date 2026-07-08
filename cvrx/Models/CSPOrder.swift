@@ -43,7 +43,6 @@ enum ContainerKind: String, Hashable, Codable {
     case Other
 }
 
-@MainActor
 @Model
 final class CSPOrder {
     @Attribute(.unique) var id: UUID
@@ -65,6 +64,10 @@ final class CSPOrder {
     var remediation: RemediationRequest?
     var verificationRecord: VerificationRecord?
     var auditEvents: [AuditEvent]
+    var activeEditorID: UUID?
+    var activeEditorUsername: String?
+    var activeEditorName: String?
+    var activeEditorLastSeenAt: Date?
 
     var finalContainerKind: ContainerKind? {
         let normalized = finalContainer
@@ -111,6 +114,32 @@ final class CSPOrder {
         case .waitingForApproval, .approved, .rejected: return false
         }
     }
+
+    var activeEditorDisplayName: String? {
+        activeEditorName ?? activeEditorUsername
+    }
+
+    var isActivelyLocked: Bool {
+        guard activeEditorID != nil, activeEditorLastSeenAt != nil else { return false }
+        return !isLockExpired
+    }
+
+    var isLockExpired: Bool {
+        guard let activeEditorLastSeenAt else { return true }
+        return Date.now.timeIntervalSince(activeEditorLastSeenAt) > Self.lockTimeout
+    }
+
+    func isLocked(by user: User?) -> Bool {
+        guard let user else { return false }
+        return isActivelyLocked && activeEditorID == user.id
+    }
+
+    func isLockedByOther(than user: User?) -> Bool {
+        guard isActivelyLocked else { return false }
+        return activeEditorID != user?.id
+    }
+
+    static let lockTimeout: TimeInterval = 45
 
     var recipeSteps: [String] {
         recipeText
@@ -168,7 +197,11 @@ final class CSPOrder {
         currentStepIndex: Int = 0,
         remediation: RemediationRequest? = nil,
         verificationRecord: VerificationRecord? = nil,
-        auditEvents: [AuditEvent] = []
+        auditEvents: [AuditEvent] = [],
+        activeEditorID: UUID? = nil,
+        activeEditorUsername: String? = nil,
+        activeEditorName: String? = nil,
+        activeEditorLastSeenAt: Date? = nil
     ) {
         self.id = id
         self.orderNumber = orderNumber
@@ -185,6 +218,10 @@ final class CSPOrder {
         self.remediation = remediation
         self.verificationRecord = verificationRecord
         self.auditEvents = auditEvents
+        self.activeEditorID = activeEditorID
+        self.activeEditorUsername = activeEditorUsername
+        self.activeEditorName = activeEditorName
+        self.activeEditorLastSeenAt = activeEditorLastSeenAt
     }
 }
 

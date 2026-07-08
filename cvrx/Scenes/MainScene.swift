@@ -3,16 +3,38 @@ import SwiftData
 
 
 struct MainScene: View {
+    @Environment(\.currentUser) private var currentUser
+
     let store: CompoundingStore
+    let onLogout: () -> Void
+
     @State private var destination: Destination? = nil
 
     enum Destination { case orders, verification }
 
     var body: some View {
-        switch destination {
-        case .orders:       OrdersTab(store: store)
-        case .verification: VerificationTab(store: store)
-        case nil:           tileMenu
+        Group {
+            switch destination {
+            case .orders:
+                OrdersTab(store: store)
+            case .verification:
+                VerificationTab(store: store)
+            case nil:
+                NavigationStack {
+                    tileMenu
+                }
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Menu {
+                    Button(role: .destructive, action: onLogout) {
+                        Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                } label: {
+                    Label(currentUser?.name ?? "User", systemImage: "person.crop.circle")
+                }
+            }
         }
     }
 
@@ -32,6 +54,7 @@ struct MainScene: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
+        .navigationTitle("CVRx")
     }
 }
 

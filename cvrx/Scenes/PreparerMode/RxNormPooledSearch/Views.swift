@@ -554,6 +554,21 @@ struct NDCPanelView: View {
                         Text(result.path)
                             .font(.caption2.italic())
                             .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Button {
+                            vm.importProduct(from: node)
+                        } label: {
+                            Label(vm.importingNodeID == node.id ? "Importing" : "Import", systemImage: "tray.and.arrow.down")
+                        }
+                        .font(.caption.weight(.semibold))
+                        .controlSize(.small)
+                        .buttonStyle(.bordered)
+                        .disabled(result.ndcs.isEmpty || vm.importingNodeID == node.id)
+                    }
+                    if !vm.importSummary.isEmpty {
+                        Text(vm.importSummary)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
                     FlowLayout(spacing: 5) {
                         ForEach(result.ndcs, id: \.self) { ndc in

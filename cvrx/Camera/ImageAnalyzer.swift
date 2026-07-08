@@ -1,10 +1,32 @@
 import Vision
 import Foundation
+import CoreGraphics
+
+
+private typealias DetectedBarcode = CaptureAnalysis.DetectedBarcode
+private typealias DetectedProduct = CaptureAnalysis.DetectedProduct
+
+// MARK: - Analyzer
 
 /// Runs Vision requests on a captured image and extracts pharmaceutical label data.
+///
+/// Multi-product strategy:
+/// 1. Every barcode becomes a product *anchor* (GS1 payloads are parsed directly).
+/// 2. OCR lines are assigned to the nearest anchor within `maxAssignDistance`
+///    (normalized coords); leftovers go to `unassignedLines`.
+/// 3. Regex extraction runs *per product* on only that product's assigned lines,
+///    filling fields the barcode didn't provide.
+/// 4. With no barcodes, NDC-bearing OCR lines act as anchors instead; if none or
+///    one is found, the whole frame is treated as a single product (old behavior).
+/// 5. Products that are clearly the same package (identical payload, or identical
+///    NDC + lot) are merged.
 actor ImageAnalyzer {
     static let shared = ImageAnalyzer()
     private init() {}
+
+    /// Max normalized distance between an OCR line and an anchor for association.
+    /// Tune against real captures; 0.35 works for 1–4 vials in a typical frame.
+    private let maxAssignDistance: CGFloat = 0.35
 
     func analyze(url: URL) async -> CaptureAnalysis {
         let textRequest: RecognizeTextRequest = {
@@ -27,45 +49,196 @@ actor ImageAnalyzer {
 
     // MARK: - Build
 
+    /// An OCR line paired with its location.
+    private struct LocatedLine {
+        let text: String
+        let center: CGPoint
+    }
+
+    /// A product under construction, pinned to a location in the image.
+    private struct ProductBuilder {
+        var product: DetectedProduct
+        let anchor: CGPoint
+        var lines: [LocatedLine] = []
+    }
+
     private func build(
         barcodes: [BarcodeObservation],
         text: [RecognizedTextObservation],
         classifications: [ClassificationObservation]
     ) -> CaptureAnalysis {
-        
-        var a: CaptureAnalysis = CaptureAnalysis()
+
+        var a = CaptureAnalysis()
 
         a.imageCategories = classifications
             .filter { $0.hasMinimumPrecision(0.1, forRecall: 0.8) }
             .prefix(3)
             .map(\.identifier)
 
+        // 1. Barcodes → anchors
+        var builders: [ProductBuilder] = []
         for obs in barcodes {
             guard let payload = obs.payloadString else { continue }
+            let center = Self.center(of: obs.boundingBox)
             a.barcodes.append(.init(
                 symbology: String(describing: obs.symbology),
                 payload: payload,
-                isGS1: obs.isGS1DataCarrier
+                isGS1: obs.isGS1DataCarrier,
+                center: center
             ))
+
+            var product = DetectedProduct(sourceBarcodePayload: payload)
             if obs.isGS1DataCarrier {
-                extractGS1(from: payload, into: &a)
+                extractGS1(from: payload, into: &product)
             } else {
-                a.detectedNDC = a.detectedNDC ?? ndc(in: payload)
+                product.detectedNDC = ndc(in: payload)
             }
+            builders.append(.init(product: product, anchor: center))
         }
 
-        a.recognizedLines = text.compactMap { $0.topCandidates(1).first?.string }
-        let full = a.recognizedLines.joined(separator: "\n")
-        a.detectedLot        = a.detectedLot        ?? lot(in: full)
-        a.detectedExpiration = a.detectedExpiration ?? expiration(in: full)
-        a.detectedNDC        = a.detectedNDC        ?? ndc(in: full)
+        // 2. OCR lines with locations
+        let located: [LocatedLine] = text.compactMap { obs in
+            guard let s = obs.topCandidates(1).first?.string else { return nil }
+            return LocatedLine(text: s, center: Self.center(of: obs.boundingBox))
+        }
+        a.recognizedLines = located.map(\.text)
 
+        // 3. No barcode anchors → fall back to NDC-line anchoring / single product
+        if builders.isEmpty {
+            return buildWithoutBarcodes(from: located, into: a)
+        }
+
+        // 4. Assign each line to the nearest anchor within range
+        var unassigned: [LocatedLine] = []
+        for line in located {
+            if let idx = nearestBuilder(to: line.center, in: builders) {
+                builders[idx].lines.append(line)
+            } else {
+                unassigned.append(line)
+            }
+        }
+        a.unassignedLines = unassigned.map(\.text)
+
+        // 5. Per-product OCR extraction fills whatever the barcode didn't provide
+        for i in builders.indices {
+            fillFromOCR(&builders[i])
+        }
+
+        a.products = merge(builders.map(\.product))
         return a
+    }
+
+    /// Index of the closest anchor within `maxAssignDistance`, or nil.
+    private func nearestBuilder(to point: CGPoint, in builders: [ProductBuilder]) -> Int? {
+        var best: (idx: Int, dist: CGFloat)? = nil
+        for (i, b) in builders.enumerated() {
+            let d = hypot(point.x - b.anchor.x, point.y - b.anchor.y)
+            if d <= maxAssignDistance, d < (best?.dist ?? .infinity) {
+                best = (i, d)
+            }
+        }
+        return best?.idx
+    }
+
+    private func fillFromOCR(_ b: inout ProductBuilder) {
+        b.product.assignedLines = b.lines.map(\.text)
+        let joined = b.product.assignedLines.joined(separator: "\n")
+        b.product.detectedLot        = b.product.detectedLot        ?? lot(in: joined)
+        b.product.detectedExpiration = b.product.detectedExpiration ?? expiration(in: joined)
+        b.product.detectedNDC        = b.product.detectedNDC        ?? ndc(in: joined)
+    }
+
+    /// No barcodes in frame: anchor on NDC-bearing OCR lines instead.
+    /// 0 or 1 NDC lines → single product from the full transcript (legacy behavior).
+    /// 2+ NDC lines → one product per NDC line, other lines assigned by proximity.
+    private func buildWithoutBarcodes(from located: [LocatedLine], into analysis: CaptureAnalysis) -> CaptureAnalysis {
+        var a = analysis
+
+        let ndcLines = located.compactMap { line -> (line: LocatedLine, ndc: String)? in
+            guard let value = ndc(in: line.text) else { return nil }
+            return (line, value)
+        }
+
+        guard ndcLines.count >= 2 else {
+            // Single (or zero) product: extract from the whole transcript.
+            let full = located.map(\.text).joined(separator: "\n")
+            var product = DetectedProduct()
+            product.detectedNDC        = ndc(in: full)
+            product.detectedLot        = lot(in: full)
+            product.detectedExpiration = expiration(in: full)
+            product.assignedLines      = located.map(\.text)
+            // Only emit a product if we actually found something label-like.
+            if product.detectedNDC != nil || product.detectedLot != nil || product.detectedExpiration != nil {
+                a.products = [product]
+            } else {
+                a.unassignedLines = located.map(\.text)
+            }
+            return a
+        }
+
+        var builders: [ProductBuilder] = ndcLines.map {
+            var p = DetectedProduct()
+            p.detectedNDC = $0.ndc
+            return ProductBuilder(product: p, anchor: $0.line.center)
+        }
+
+        let anchorTexts = Set(ndcLines.map(\.line.text))
+        var unassigned: [LocatedLine] = []
+        for line in located where !anchorTexts.contains(line.text) {
+            if let idx = nearestBuilder(to: line.center, in: builders) {
+                builders[idx].lines.append(line)
+            } else {
+                unassigned.append(line)
+            }
+        }
+        a.unassignedLines = unassigned.map(\.text)
+
+        for i in builders.indices {
+            fillFromOCR(&builders[i])
+        }
+
+        a.products = merge(builders.map(\.product))
+        return a
+    }
+
+    /// Merges entries that are clearly the same physical package:
+    /// identical barcode payload, or identical non-nil NDC + lot.
+    /// Two vials of the same NDC with different (or unknown) lots stay separate.
+    private func merge(_ products: [DetectedProduct]) -> [DetectedProduct] {
+        var result: [DetectedProduct] = []
+        for p in products {
+            if let idx = result.firstIndex(where: { existing in
+                if let ep = existing.sourceBarcodePayload, let pp = p.sourceBarcodePayload, ep == pp {
+                    return true
+                }
+                if let en = existing.detectedNDC, let pn = p.detectedNDC, en == pn,
+                   let el = existing.detectedLot, let pl = p.detectedLot, el == pl {
+                    return true
+                }
+                return false
+            }) {
+                // Keep the richer record; backfill missing fields from the duplicate.
+                result[idx].detectedNDC        = result[idx].detectedNDC        ?? p.detectedNDC
+                result[idx].detectedLot        = result[idx].detectedLot        ?? p.detectedLot
+                result[idx].detectedExpiration = result[idx].detectedExpiration ?? p.detectedExpiration
+                result[idx].assignedLines.append(contentsOf: p.assignedLines)
+            } else {
+                result.append(p)
+            }
+        }
+        return result
+    }
+
+    private static func center(of rect: NormalizedRect) -> CGPoint {
+        CGPoint(
+            x: rect.origin.x + rect.width  / 2,
+            y: rect.origin.y + rect.height / 2
+        )
     }
 
     // MARK: - GS1 Parsing
 
-    private func extractGS1(from payload: String, into a: inout CaptureAnalysis) {
+    private func extractGS1(from payload: String, into p: inout DetectedProduct) {
         if payload.contains("(") {
             // Human-readable: "(01)00312345...(17)YYMMDD(10)LOT"
             let pattern = #/\((\d{2,4})\)([^(]*)/#
@@ -73,18 +246,18 @@ actor ImageAnalyzer {
                 applyGS1(
                     ai: String(match.output.1),
                     value: String(match.output.2).trimmingCharacters(in: .whitespaces),
-                    to: &a
+                    to: &p
                 )
             }
         } else {
             // Raw GS1 with optional FNC1 group separators (U+001D)
             for segment in payload.components(separatedBy: "\u{1D}") where !segment.isEmpty {
-                parseRawSegment(segment, into: &a)
+                parseRawSegment(segment, into: &p)
             }
         }
     }
 
-    private func parseRawSegment(_ seg: String, into a: inout CaptureAnalysis) {
+    private func parseRawSegment(_ seg: String, into p: inout DetectedProduct) {
         // Fixed-length AIs: AI code → data field length
         let fixed: [String: Int] = [
             "01": 14, "02": 14,
@@ -99,10 +272,10 @@ actor ImageAnalyzer {
             let ai = String(s.prefix(2))
             if let len = fixed[ai] {
                 guard s.count >= 2 + len else { break }
-                applyGS1(ai: ai, value: String(s.dropFirst(2).prefix(len)), to: &a)
+                applyGS1(ai: ai, value: String(s.dropFirst(2).prefix(len)), to: &p)
                 s = s.dropFirst(2 + len)
             } else if variable.contains(ai) {
-                applyGS1(ai: ai, value: String(s.dropFirst(2)), to: &a)
+                applyGS1(ai: ai, value: String(s.dropFirst(2)), to: &p)
                 break
             } else {
                 s = s.dropFirst(1)
@@ -110,11 +283,11 @@ actor ImageAnalyzer {
         }
     }
 
-    private func applyGS1(ai: String, value: String, to a: inout CaptureAnalysis) {
+    private func applyGS1(ai: String, value: String, to p: inout DetectedProduct) {
         switch ai {
-        case "01": a.detectedNDC        = a.detectedNDC        ?? ndcFromGTIN(value)
-        case "10": if !value.isEmpty { a.detectedLot = a.detectedLot ?? value }
-        case "17": a.detectedExpiration = a.detectedExpiration ?? gs1Date(value)
+        case "01": p.detectedNDC        = p.detectedNDC        ?? ndcFromGTIN(value)
+        case "10": if !value.isEmpty { p.detectedLot = p.detectedLot ?? value }
+        case "17": p.detectedExpiration = p.detectedExpiration ?? gs1Date(value)
         default:   break
         }
     }

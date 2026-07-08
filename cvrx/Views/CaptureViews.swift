@@ -50,6 +50,77 @@ enum CaptureBadge: Equatable {
     }
 }
 
+struct CaptureBadgePill: View {
+    let badge: CaptureBadge
+    var horizontalPadding: CGFloat = 8
+    var verticalPadding: CGFloat = 3
+
+    var body: some View {
+        if badge != .none {
+            PillLabel(
+                text: badge.label,
+                systemImage: badge.icon,
+                tone: badge.borderColor,
+                font: .caption.weight(.bold),
+                horizontalPadding: horizontalPadding,
+                verticalPadding: verticalPadding
+            )
+        }
+    }
+}
+
+struct CaptureBadgeIconChip: View {
+    let badge: CaptureBadge
+
+    var body: some View {
+        if badge != .none {
+            Image(systemName: badge.icon)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(4)
+                .background(Circle().fill(badge.borderColor))
+                .padding(3)
+        }
+    }
+}
+
+private struct CaptureBadgeBorder: ViewModifier {
+    let badge: CaptureBadge
+    let lineWidth: CGFloat
+
+    func body(content: Content) -> some View {
+        content.overlay(
+            Rectangle()
+                .strokeBorder(badge.borderColor, lineWidth: badge == .none ? 0 : lineWidth)
+                .allowsHitTesting(false)
+        )
+    }
+}
+
+extension View {
+    func captureBadgeBorder(_ badge: CaptureBadge, lineWidth: CGFloat = 4) -> some View {
+        modifier(CaptureBadgeBorder(badge: badge, lineWidth: lineWidth))
+    }
+}
+
+struct PinNoteCallout: View {
+    let note: String
+
+    var body: some View {
+        Text(note)
+            .font(.caption)
+            .foregroundStyle(.primary)
+            .multilineTextAlignment(.leading)
+            .lineLimit(3)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: 220, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .roundedPanel(fill: .regularMaterial)
+            .shadow(color: .black.opacity(0.16), radius: 6, x: 0, y: 2)
+    }
+}
+
 extension CSPOrder {
     /// Derive the badge for a capture based on this order's current state and
     /// any associated remediation. Lives next to `CaptureBadge` because it is
@@ -96,14 +167,7 @@ struct CaptureThumbnailImage: View {
                     )
             )
             .overlay(alignment: .topTrailing) {
-                if badge != .none {
-                    Image(systemName: badge.icon)
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(4)
-                        .background(Circle().fill(badge.borderColor))
-                        .padding(3)
-                }
+                CaptureBadgeIconChip(badge: badge)
             }
             .overlay(alignment: .bottomLeading) {
                 if !capture.preparerFlags.isEmpty {
@@ -225,6 +289,7 @@ struct CaptureViewerSheet: View {
 
     @State private var showDeleteConfirm = false
     @State private var selectedPin: CaptureFlag? = nil
+    @State private var hoveredPinID: UUID? = nil
     @State private var pendingPinLocation: CGPoint? = nil
     @State private var pendingNote: String = ""
     @State private var captureAnalysis: CaptureAnalysis?
@@ -244,16 +309,11 @@ struct CaptureViewerSheet: View {
                 analysisPanel
 
                 if badge != .none {
-                    HStack(spacing: 6) {
-                        Image(systemName: badge.icon)
-                            .font(.caption.weight(.bold))
-                        Text(badge.label)
-                            .font(.caption.weight(.bold))
-                    }
-                    .foregroundStyle(badge.borderColor)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Capsule().fill(badge.borderColor.opacity(0.15)))
+                    CaptureBadgePill(
+                        badge: badge,
+                        horizontalPadding: 10,
+                        verticalPadding: 6
+                    )
                     .padding(.vertical, 10)
                 }
 
@@ -298,17 +358,11 @@ struct CaptureViewerSheet: View {
     // MARK: subviews
 
     private var preparerInstructionBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "hand.tap.fill")
-                .foregroundStyle(.orange)
-            Text("Tap the image to add a pin with a note. Tap a pin to view or delete it.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color.orange.opacity(0.08))
+        InstructionBar(
+            systemImage: "hand.tap.fill",
+            text: "Tap the image to add a pin with a note. Tap a pin to view or delete it.",
+            tone: .orange
+        )
     }
 
     private var preparerPinFooter: some View {
@@ -337,11 +391,7 @@ struct CaptureViewerSheet: View {
             Color.black.opacity(0.04)
             imageWithPins
         }
-        .overlay(
-            Rectangle()
-                .strokeBorder(badge.borderColor, lineWidth: badge == .none ? 0 : 4)
-                .allowsHitTesting(false)
-        )
+        .captureBadgeBorder(badge)
     }
 
     @ViewBuilder
@@ -394,20 +444,37 @@ struct CaptureViewerSheet: View {
                     }
 
                 ForEach(Array(capture.preparerFlags.enumerated()), id: \.element.id) { idx, pin in
-                    PinMarker(number: idx + 1, color: .orange)
-                        .opacity(selectedPin == nil ? 1.0 : (selectedPin?.id == pin.id ? 1.0 : 0.12))
-                        .animation(.easeInOut(duration: 0.15), value: selectedPin?.id)
-                        .position(
-                            x: CGFloat(pin.x) * geo.size.width,
-                            y: CGFloat(pin.y) * geo.size.height
-                        )
-                        .onTapGesture {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                pendingPinLocation = nil
-                                pendingNote = ""
-                                selectedPin = (selectedPin?.id == pin.id) ? nil : pin
-                            }
+                    let isSelected = selectedPin?.id == pin.id
+                    let isHovered = hoveredPinID == pin.id
+
+                    ZStack {
+                        PinMarker(number: idx + 1, color: .orange)
+
+                        if (isSelected || isHovered), let note = displayNote(for: pin) {
+                            PinNoteCallout(note: note)
+                                .offset(y: -48)
+                                .allowsHitTesting(false)
+                                .transition(.opacity.combined(with: .scale(scale: 0.96)))
                         }
+                    }
+                    .opacity(selectedPin == nil ? 1.0 : (isSelected ? 1.0 : 0.12))
+                    .animation(.easeInOut(duration: 0.15), value: selectedPin?.id)
+                    .animation(.easeInOut(duration: 0.12), value: hoveredPinID)
+                    .position(
+                        x: CGFloat(pin.x) * geo.size.width,
+                        y: CGFloat(pin.y) * geo.size.height
+                    )
+                    .onHover { isHovering in
+                        hoveredPinID = isHovering ? pin.id : nil
+                    }
+                    .help(displayNote(for: pin) ?? "Pin \(idx + 1)")
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            pendingPinLocation = nil
+                            pendingNote = ""
+                            selectedPin = isSelected ? nil : pin
+                        }
+                    }
                 }
             }
         }
@@ -424,7 +491,7 @@ struct CaptureViewerSheet: View {
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.orange)
                 }
-                if let note = pin.note, !note.isEmpty {
+                if let note = displayNote(for: pin) {
                     Text(note)
                         .font(.subheadline)
                         .foregroundStyle(.primary)
@@ -471,9 +538,22 @@ struct CaptureViewerSheet: View {
                     .foregroundStyle(.orange)
                 Spacer()
             }
-            TextField("Note (optional)", text: $pendingNote, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...3)
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $pendingNote)
+                    .frame(height: 72)
+                    .padding(6)
+                    .scrollContentBackground(.hidden)
+
+                if pendingNote.isEmpty {
+                    Text("Note (optional)")
+                        .font(.body)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 14)
+                        .allowsHitTesting(false)
+                }
+            }
+            .roundedPanel(fill: Color.rxGroupedBackground)
             HStack {
                 Button("Cancel") {
                     pendingPinLocation = nil
@@ -499,15 +579,13 @@ struct CaptureViewerSheet: View {
         (capture.preparerFlags.firstIndex(where: { $0.id == pin.id }) ?? 0) + 1
     }
 
+    private func displayNote(for pin: CaptureFlag) -> String? {
+        let note = pin.note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return note.isEmpty ? nil : note
+    }
+
     private var placeholder: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "photo")
-                .font(.system(size: 48))
-                .foregroundStyle(.tertiary)
-            Text("No image available")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
+        ImageUnavailablePlaceholder()
     }
 
     // MARK: - Image Analysis

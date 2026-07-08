@@ -101,6 +101,7 @@ struct VerifyScene: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
+                    .disabled(user == nil)
 
                     Button {
                         showRemediateSheet = true
@@ -110,28 +111,16 @@ struct VerifyScene: View {
                     }
                     .buttonStyle(.bordered)
                     .tint(.purple)
-                    .disabled(order.captures.isEmpty)
+                    .disabled(order.captures.isEmpty || user == nil)
 
                     Button {
-                        store
-                            .verify(
-                                orderID: order.id,
-                                verifiedBy: user!,
-                                approved: true
-                            )
-                        order.status = .approved
-                        order.verificationRecord = VerificationRecord(
-                            verifiedBy: user!,
-                            verifiedAt: Date(),
-                            decision: .approved
-                        )
-                        dismiss()
+                        approveOrder()
                     } label: {
                         Label("Approve", systemImage: "checkmark.seal.fill")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(order.captures.isEmpty)
+                    .disabled(order.captures.isEmpty || user == nil)
                 }
                 .padding()
                 .background(.bar)
@@ -142,17 +131,8 @@ struct VerifyScene: View {
                 captures: chronologicalCaptures,
                 initialIndex: currentIndex,
                 onCancel: { showRemediateSheet = false },
-                onSubmit: { reason,
-                    flags in
-                    store
-                        .createRemediationRequest(
-                            orderID: order.id,
-                            reason: reason,
-                            requestedBy: user!
-                        )
-                    order.status = .remediation
-                    showRemediateSheet = false
-                    dismiss()
+                onSubmit: { reason, flags in
+                    requestRemediation(reason: reason, flags: flags)
                 }
             )
         }
@@ -174,28 +154,55 @@ struct VerifyScene: View {
 
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Reject") {
-                            store
-                                .verify(
-                                    orderID: order.id,
-                                    verifiedBy: user!,
-                                    approved: false
-                                )
-                            order.status = .rejected
-                            order.verificationRecord = VerificationRecord(
-                                verifiedBy: user!,
-                                verifiedAt: Date(),
-                                decision: .rejected,
-                                rejectionReason: rejectionReason.trimmingCharacters(in: .whitespacesAndNewlines)
-                            )
-                            showRejectSheet = false
-                            dismiss()
+                            rejectOrder()
                         }
-                        .disabled(rejectionReason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(rejectionReason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || user == nil)
                     }
                 }
             }
             .presentationDetents([.medium])
         }
+    }
+
+    private func approveOrder() {
+        guard let user else { return }
+
+        store.verify(orderID: order.id, verifiedBy: user, approved: true)
+        order.status = .approved
+        order.verificationRecord = VerificationRecord(
+            verifiedBy: user,
+            verifiedAt: Date(),
+            decision: .approved
+        )
+        dismiss()
+    }
+
+    private func rejectOrder() {
+        guard let user else { return }
+
+        store.verify(orderID: order.id, verifiedBy: user, approved: false)
+        order.status = .rejected
+        order.verificationRecord = VerificationRecord(
+            verifiedBy: user,
+            verifiedAt: Date(),
+            decision: .rejected,
+            rejectionReason: rejectionReason.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        showRejectSheet = false
+        dismiss()
+    }
+
+    private func requestRemediation(reason: String, flags: [CaptureFlag]) {
+        guard let user else { return }
+
+        store.createRemediationRequest(
+            orderID: order.id,
+            reason: reason,
+            requestedBy: user
+        )
+        order.status = .remediation
+        showRemediateSheet = false
+        dismiss()
     }
 }
 
@@ -240,25 +247,20 @@ struct ZoomableCarousel: View {
                 if captures.indices.contains(currentIndex) {
                     let badge = order.badge(for: captures[currentIndex])
                     if badge != .none {
-                        Label(badge.label, systemImage: badge.icon)
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(badge.borderColor)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(badge.borderColor.opacity(0.15)))
+                        CaptureBadgePill(badge: badge)
                     }
                 }
 
                 if captures.indices.contains(currentIndex),
                    !captures[currentIndex].preparerFlags.isEmpty {
                     let count = captures[currentIndex].preparerFlags.count
-                    Label("\(count) preparer pin\(count == 1 ? "" : "s")",
-                          systemImage: "mappin.and.ellipse")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.orange.opacity(0.15)))
+                    PillLabel(
+                        text: "\(count) preparer pin\(count == 1 ? "" : "s")",
+                        systemImage: "mappin.and.ellipse",
+                        tone: .orange,
+                        font: .caption.weight(.bold),
+                        verticalPadding: 3
+                    )
                 }
 
                 Spacer()
@@ -339,11 +341,7 @@ struct ZoomableImageView: View {
             .scaleEffect(scale)
             .offset(offset)
             .opacity(badge.opacity)
-            .overlay(
-                Rectangle()
-                    .strokeBorder(badge.borderColor, lineWidth: badge == .none ? 0 : 4)
-                    .allowsHitTesting(false)
-            )
+            .captureBadgeBorder(badge)
             .gesture(
                 SimultaneousGesture(
                     MagnificationGesture()
@@ -402,14 +400,7 @@ struct ZoomableImageView: View {
     }
 
     private var placeholder: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "photo")
-                .font(.system(size: 48))
-                .foregroundStyle(.tertiary)
-            Text("No image available")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
+        ImageUnavailablePlaceholder()
     }
 }
 
