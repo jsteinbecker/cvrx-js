@@ -69,7 +69,9 @@ struct OrdersTab: View {
                 case .extra(.facility):
                     NavigationStack { FacilityOverviewScene() }
                 case .extra(.labelers):
-                    NavigationStack { LabelersScene() }
+                    NavigationStack { LabelersScene(store: store) }
+                case .extra(.ndcProducts):
+                    NavigationStack { NDCProductsScene(store: store) }
                 case .extra(.productSearch):
                     NavigationStack { RxNormSearchView().navigationTitle("Product Search") }
                 case nil:
@@ -87,7 +89,7 @@ struct OrdersTab: View {
         NavigationStack {
             HStack {
                 Spacer()
-                OrderGeneratorButton()
+                OrderGeneratorButton(store: store)
             }
             List(filtered) { order in
                 NavigationLink(value: order.id) {
@@ -173,6 +175,7 @@ private enum OrderStatusFilter: String, CaseIterable, Identifiable {
 private enum SidebarExtra: String, CaseIterable, Identifiable {
     case facility
     case labelers
+    case ndcProducts
     case productSearch
 
     var id: Self { self }
@@ -181,6 +184,7 @@ private enum SidebarExtra: String, CaseIterable, Identifiable {
         switch self {
         case .facility: "Facility"
         case .labelers: "Labelers"
+        case .ndcProducts: "NDC Products"
         case .productSearch: "Product Search"
         }
     }
@@ -189,6 +193,7 @@ private enum SidebarExtra: String, CaseIterable, Identifiable {
         switch self {
         case .facility: "building.2.fill"
         case .labelers: "shippingbox.fill"
+        case .ndcProducts: "pills.fill"
         case .productSearch: "box.fill"
         }
     }

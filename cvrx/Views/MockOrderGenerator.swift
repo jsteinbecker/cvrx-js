@@ -12,11 +12,11 @@ import Foundation
 
 @MainActor
 struct OrderGeneratorButton: View {
-    @Environment(\.modelContext) private var modelContext
+    let store: CompoundingStore
 
     var body: some View {
         Button {
-            MockData.makeSampleOrders(into: modelContext, count: 1)
+            store.generateSampleOrders(count: 1)
         } label: {
             Label("Order", systemImage: "plus")
         }

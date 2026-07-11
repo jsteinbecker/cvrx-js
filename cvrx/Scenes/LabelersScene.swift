@@ -2,8 +2,7 @@ import SwiftUI
 import SwiftData
 
 struct LabelersScene: View {
-    @Environment(\.modelContext)
-    var modelContext
+    let store: CompoundingStore
 
     @Query(filter: #Predicate<Labeler> { $0.hidden != true }, sort: \Labeler.name)
     private var visibleLabelers: [Labeler]
@@ -95,7 +94,7 @@ struct LabelersScene: View {
             }
         }
         .sheet(isPresented: $showingAddLabelersSheet) {
-            AddLabelersSheet()
+            AddLabelersSheet(store: store)
         }
     }
 }

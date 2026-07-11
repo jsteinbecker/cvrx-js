@@ -8,6 +8,7 @@ struct RxCompoundingDocumentationApp: App {
 
     private let container: ModelContainer
     private let store: CompoundingStore
+    private let supabaseAuth: SupabaseAuthService?
 
     init() {
         let schema = Schema([
@@ -62,6 +63,8 @@ struct RxCompoundingDocumentationApp: App {
                 }
             }
         store = CompoundingStore(modelContext: container.mainContext)
+        supabaseAuth = SupabaseConfig.bundled.map(SupabaseAuthService.init(config:))
+        store.configureSupabaseAuth(supabaseAuth)
     }
 
     var body: some Scene {
@@ -69,12 +72,27 @@ struct RxCompoundingDocumentationApp: App {
             Group {
                 if let currentUser {
                     MainScene(store: store) {
+                        store.stopSupabaseRealtime()
+                        Task { await supabaseAuth?.signOut() }
                         self.currentUser = nil
                     }
                     .environment(\.currentUser, currentUser)
                 } else {
-                    LoginScene(store: store) { user in
+                    LoginScene(store: store, supabaseAuth: supabaseAuth) { user in
                         currentUser = user
+                        if let supabaseAuth {
+                            Task {
+                                do {
+                                    try await store.syncLabelersFromSupabase()
+                                } catch {
+                                    print("Supabase labeler sync failed: \(error.localizedDescription)")
+                                }
+                                await store.syncOrdersFromSupabase(supabaseAuth, currentUser: user)
+                                await MainActor.run {
+                                    store.startSupabaseRealtime(currentUser: user)
+                                }
+                            }
+                        }
                     }
                 }
             }

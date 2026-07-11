@@ -71,6 +71,7 @@ final class Product {
     var importedRxCUI: String?
     var importedTTY: String?
     var importedAt: Date?
+    var facilityID: String?
     /// Labeled strength of the product (e.g. 50 for "50 mg/mL" or "500 mg vial").
     var strength: Double
     var strengthUnit: QuantityUnit
@@ -88,6 +89,7 @@ final class Product {
         importedRxCUI: String? = nil,
         importedTTY: String? = nil,
         importedAt: Date? = nil,
+        facilityID: String? = nil,
         strength: Double,
         strengthUnit: QuantityUnit,
         mlConcentration: Double? = nil
@@ -98,6 +100,7 @@ final class Product {
         self.importedRxCUI = importedRxCUI
         self.importedTTY = importedTTY
         self.importedAt = importedAt
+        self.facilityID = facilityID
         self.strength = strength
         self.strengthUnit = strengthUnit
         self.mlConcentration = mlConcentration
@@ -304,6 +307,9 @@ final class CompoundComponent {
     var quantityUnit: QuantityUnit
     /// Lots scanned in to fulfill this component.
     var utilizedLots: [CompoundUtilizedLot]
+    /// True when this row was created from a product that was not in the ordered recipe.
+    var isUnexpected: Bool = false
+    var unexpectedBarcodeValue: String? = nil
     /// Indicates the component has at least one verified scan.
     var isScanned: Bool { !utilizedLots.isEmpty }
     var scanOverride: ScanOverride? = nil
@@ -314,7 +320,9 @@ final class CompoundComponent {
         product: Product,
         totalQuantity: Double,
         quantityUnit: QuantityUnit,
-        utilizedLots: [CompoundUtilizedLot] = []
+        utilizedLots: [CompoundUtilizedLot] = [],
+        isUnexpected: Bool = false,
+        unexpectedBarcodeValue: String? = nil
     ) {
         self.id = id
         self.compound = compound
@@ -322,6 +330,8 @@ final class CompoundComponent {
         self.totalQuantity = totalQuantity
         self.quantityUnit = quantityUnit
         self.utilizedLots = utilizedLots
+        self.isUnexpected = isUnexpected
+        self.unexpectedBarcodeValue = unexpectedBarcodeValue
     }
 
     /// Sum of what's been drawn across all scanned lots.
@@ -336,7 +346,8 @@ final class CompoundComponent {
 
     /// True when scanned lots fully cover the target (within a small tolerance).
     func isFulfilled(tolerance: Double = 0.001) -> Bool {
-        abs(totalQuantity - quantityAccountedFor) <= tolerance
+        guard !isUnexpected else { return false }
+        return abs(totalQuantity - quantityAccountedFor) <= tolerance
             || quantityAccountedFor >= totalQuantity
     }
 

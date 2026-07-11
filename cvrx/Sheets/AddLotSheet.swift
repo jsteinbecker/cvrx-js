@@ -13,8 +13,14 @@ struct AddLotSheet: View {
     @State private var quantityText: String
     @State private var hasExpiration: Bool = true
     @State private var expiration: Date
+    @State private var manufacturer: String?
+    @FocusState private var focusedField: Field?
 
     @Environment(\.dismiss) private var dismiss
+
+    private enum Field: Hashable {
+        case lot, barcode
+    }
 
     init(
         component: CompoundComponent,
@@ -55,6 +61,7 @@ struct AddLotSheet: View {
                     TextField("Lot number", text: $lotNumber)
                         .frame(width: 300)
                         .padding(10)
+                        .focused($focusedField, equals: .lot)
                         #if os(iOS)
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
@@ -63,6 +70,10 @@ struct AddLotSheet: View {
                     TextField("Barcode (optional)", text: $barcodeValue)
                         .frame(width: 300)
                         .padding(10)
+                        .focused($focusedField, equals: .barcode)
+                        .onChange(of: barcodeValue) { _, newValue in
+                            applyParsedBarcode(newValue)
+                        }
                         #if os(iOS)
                         .keyboardType(.numbersAndPunctuation)
                         .autocorrectionDisabled()
@@ -123,6 +134,7 @@ struct AddLotSheet: View {
                             barcodeValue: trimmedBarcode.isEmpty ? nil : trimmedBarcode,
                             lot: trimmedLot,
                             expiration: hasExpiration ? expiration : nil,
+                            mfg: manufacturer,
                             strengthQuantity: qty
                         )
                         onSubmit(lot)
@@ -151,6 +163,18 @@ struct AddLotSheet: View {
         let lotOK = !lotNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let qtyOK = (parsedQuantity ?? 0) > 0
         return lotOK && qtyOK && !isExpired
+    }
+
+    private func applyParsedBarcode(_ value: String) {
+        let parsed = GS1BarcodeParser.parse(value)
+        if let detectedLot = parsed.detectedLot, lotNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lotNumber = detectedLot
+        }
+        if let detectedExpiration = parsed.detectedExpiration {
+            hasExpiration = true
+            expiration = detectedExpiration
+        }
+        manufacturer = parsed.detectedManufacturer
     }
 
     private static func formatForField(_ value: Double) -> String {

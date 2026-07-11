@@ -149,17 +149,17 @@ public struct DateSelector: View {
                          _ seg: Segment,
                          placeholder: String,
                          width: CGFloat) -> some View {
-        TextField(placeholder, text: text)
-            .focused($focus, equals: seg)
-            .multilineTextAlignment(.center)
-            .textFieldStyle(.plain)
-            .frame(width: width)
-            #if os(iOS)
-            .keyboardType(.numberPad)
-            .textInputAutocapitalization(.never)
-            #endif
-            .autocorrectionDisabled()
-    }
+                                TextField(placeholder, text: text)
+                                    .focused($focus, equals: seg)
+                                    .multilineTextAlignment(.center)
+                                    .textFieldStyle(.plain)
+                                    .frame(width: width)
+                                    #if os(iOS)
+                                    .keyboardType(.numberPad)
+                                    .textInputAutocapitalization(.never)
+                                    #endif
+                                    .autocorrectionDisabled()
+                            }
 
     // MARK: Typing handlers
 

@@ -1,19 +1,81 @@
 import SwiftUI
 import SwiftData
 
+@MainActor
 @Observable
 final class CompoundingStore {
-    private let modelContext: ModelContext
+    let modelContext: ModelContext
+    var supabaseAuth: SupabaseAuthService?
+    private var supabaseRealtime: SupabaseRealtimeService?
+    private var realtimeSyncTask: Task<Void, Never>?
 
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
         seedIfNeeded()
     }
 
+    func configureSupabaseAuth(_ supabaseAuth: SupabaseAuthService?) {
+        self.supabaseAuth = supabaseAuth
+    }
+
+    func writeToSupabase(_ operation: @escaping @MainActor (SupabaseWriteService) async throws -> Void) {
+        guard let supabaseAuth else { return }
+        Task { @MainActor in
+            do {
+                try await operation(SupabaseWriteService(authService: supabaseAuth))
+            } catch {
+                print("Supabase write failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func startSupabaseRealtime(currentUser: User) {
+        guard let supabaseAuth else { return }
+        let currentUserID = currentUser.id
+        Task { [weak self, supabaseAuth, currentUserID] in
+            do {
+                let connectionInfo = try await supabaseAuth.makeRealtimeConnectionInfo()
+                let realtime = SupabaseRealtimeService(connectionInfo: connectionInfo) { [weak self, currentUserID] in
+                    await self?.scheduleSupabaseRealtimeSync(currentUserID: currentUserID)
+                }
+                await MainActor.run {
+                    self?.supabaseRealtime = realtime
+                }
+                await realtime.start()
+            } catch {
+                print("Supabase realtime start failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func stopSupabaseRealtime() {
+        realtimeSyncTask?.cancel()
+        realtimeSyncTask = nil
+        guard let supabaseRealtime else { return }
+        self.supabaseRealtime = nil
+        Task {
+            await supabaseRealtime.stop()
+        }
+    }
+
+    private func scheduleSupabaseRealtimeSync(currentUserID: User.ID) {
+        realtimeSyncTask?.cancel()
+        realtimeSyncTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled,
+                  let self,
+                  let supabaseAuth = self.supabaseAuth,
+                  let currentUser = self.user(for: currentUserID)
+            else { return }
+            await self.syncOrdersFromSupabase(supabaseAuth, currentUser: currentUser)
+        }
+    }
+
     private func seedIfNeeded() {
         seedOrdersIfNeeded()
         seedFacilityIfNeeded()
         seedUsersIfNeeded()
+        refreshLabelerLookupCache()
     }
 
     private func seedOrdersIfNeeded() {
@@ -34,6 +96,20 @@ final class CompoundingStore {
         modelContext.insert(MockData.makeUserJts())
         modelContext.insert(MockData.makeUserMsm())
         try? modelContext.save()
+    }
+
+    @discardableResult
+    func generateSampleOrders(count: Int = 1) -> [CSPOrder] {
+        let orders = MockData.makeSampleOrders(into: modelContext, count: count)
+        try? modelContext.save()
+
+        for order in orders {
+            writeToSupabase { writer in
+                try await writer.insertGeneratedOrder(order)
+            }
+        }
+
+        return orders
     }
 
     func authenticateUser(username: String, password: String, facilityID: String) -> User? {
@@ -61,6 +137,14 @@ final class CompoundingStore {
         descriptor.fetchLimit = 1
         return try? modelContext.fetch(descriptor).first
     }
+
+    private func user(for id: User.ID) -> User? {
+        var descriptor = FetchDescriptor<User>(
+            predicate: #Predicate { $0.id == id }
+        )
+        descriptor.fetchLimit = 1
+        return try? modelContext.fetch(descriptor).first
+    }
     
     private func flag(for id: CaptureFlag.ID) -> CaptureFlag? {
         var descriptor = FetchDescriptor<CaptureFlag>(
@@ -83,12 +167,18 @@ final class CompoundingStore {
         order.activeEditorUsername = user.username
         order.activeEditorName = user.name
         order.activeEditorLastSeenAt = Date.now
+        writeToSupabase { writer in
+            _ = try await writer.acquireOrderLock(orderID: orderID, breakingExisting: breakingExisting)
+        }
         return true
     }
 
     func refreshOrderLock(orderID: CSPOrder.ID, by user: User) {
         guard let order = order(for: orderID), order.isLocked(by: user) else { return }
         order.activeEditorLastSeenAt = Date.now
+        writeToSupabase { writer in
+            try await writer.refreshOrderLock(orderID: orderID)
+        }
     }
 
     func releaseOrderLock(orderID: CSPOrder.ID, by user: User) {
@@ -97,9 +187,71 @@ final class CompoundingStore {
         order.activeEditorUsername = nil
         order.activeEditorName = nil
         order.activeEditorLastSeenAt = nil
+        writeToSupabase { writer in
+            try await writer.releaseOrderLock(orderID: orderID)
+        }
     }
 
     // MARK: - Lot Entry
+
+    func addUnexpectedComponent(
+        orderID: CSPOrder.ID,
+        barcodeValue: String,
+        addedBy user: User
+    ) {
+        guard user.role.canScan else { return }
+        guard let order = order(for: orderID), mutationsAllowed(on: order, by: user) else { return }
+
+        let trimmedBarcode = barcodeValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBarcode.isEmpty else { return }
+
+        let lot = CompoundUtilizedLot(
+            barcodeValue: trimmedBarcode,
+            lot: "",
+            expiration: nil,
+            strengthQuantity: 1,
+            scannedBy: user,
+            scannedAt: Date.now
+        )
+        let product = Product(
+            name: "Unexpected product \(trimmedBarcode)",
+            linkedNDCs: [trimmedBarcode],
+            strength: 1,
+            strengthUnit: .unitless
+        )
+        let component = CompoundComponent(
+            product: product,
+            totalQuantity: 0,
+            quantityUnit: .unitless,
+            utilizedLots: [lot],
+            isUnexpected: true,
+            unexpectedBarcodeValue: trimmedBarcode
+        )
+
+        order.components.append(component)
+        let shouldSetStaging = order.status == .pending
+        if shouldSetStaging { order.status = .staging }
+        writeToSupabase { writer in
+            try await writer.insertUnexpectedComponent(orderID: orderID, component: component, lot: lot)
+            if shouldSetStaging {
+                try await writer.updateOrderStatus(orderID: orderID, status: .staging)
+            }
+        }
+    }
+
+    func removeUnexpectedComponent(
+        orderID: CSPOrder.ID,
+        componentID: CompoundComponent.ID,
+        removedBy user: User
+    ) {
+        guard let order = order(for: orderID), mutationsAllowed(on: order, by: user) else { return }
+        guard let index = order.components.firstIndex(where: { $0.id == componentID }) else { return }
+        guard order.components[index].isUnexpected else { return }
+        order.components.remove(at: index)
+        writeToSupabase { writer in
+            try await writer.deleteComponent(componentID: componentID)
+        }
+    }
 
     func processBarcodeScan(
         orderID: CSPOrder.ID,
@@ -142,7 +294,17 @@ final class CompoundingStore {
             context: "Barcode scan via camera"
         ))
 
-        if order.status == .pending { order.status = .staging }
+        let shouldSetStaging = order.status == .pending
+        if shouldSetStaging { order.status = .staging }
+        if let auditEvent = order.auditEvents.last {
+            writeToSupabase { writer in
+                try await writer.insertLot(componentID: componentID, lot: lot)
+                try await writer.insertAuditEvent(orderID: orderID, event: auditEvent)
+                if shouldSetStaging {
+                    try await writer.updateOrderStatus(orderID: orderID, status: .staging)
+                }
+            }
+        }
     }
 
     func addLotManually(
@@ -183,7 +345,17 @@ final class CompoundingStore {
             context: "Manual entry (barcode unavailable)"
         ))
 
-        if order.status == .pending { order.status = .staging }
+        let shouldSetStaging = order.status == .pending
+        if shouldSetStaging { order.status = .staging }
+        if let auditEvent = order.auditEvents.last {
+            writeToSupabase { writer in
+                try await writer.insertLot(componentID: componentID, lot: utilizedLot)
+                try await writer.insertAuditEvent(orderID: orderID, event: auditEvent)
+                if shouldSetStaging {
+                    try await writer.updateOrderStatus(orderID: orderID, status: .staging)
+                }
+            }
+        }
     }
 
     func correctScannedLotField(
@@ -203,6 +375,7 @@ final class CompoundingStore {
 
         let lot = order.components[componentIndex].utilizedLots[lotIndex]
         var previousValue = ""
+        var correctedExpiration: Date?
 
         switch field {
             case "barcode":    previousValue = lot.barcodeValue ?? ""
@@ -224,6 +397,7 @@ final class CompoundingStore {
             case "lot": order.components[componentIndex].utilizedLots[lotIndex].lot = newValue
             case "expiration":
                 if let date = parseDate(newValue) {
+                    correctedExpiration = date
                     order.components[componentIndex].utilizedLots[lotIndex].expiration = date
                 }
             default: break
@@ -243,6 +417,25 @@ final class CompoundingStore {
             ),
             context: "Technician correction — pending verifier cosign"
         ))
+
+        if let auditEvent = order.auditEvents.last {
+            writeToSupabase { writer in
+                switch field {
+                case "barcode":
+                    try await writer.updateLotBarcode(lotID: lotID, barcodeValue: newValue)
+                case "lot":
+                    try await writer.updateLotNumber(lotID: lotID, lot: newValue)
+                case "expiration":
+                    if let correctedExpiration {
+                        try await writer.updateLotExpiration(lotID: lotID, expiration: correctedExpiration)
+                    }
+                default:
+                    break
+                }
+                try await writer.insertScanOverride(override)
+                try await writer.insertAuditEvent(orderID: orderID, event: auditEvent)
+            }
+        }
     }
 
     func cosignLotCorrection(
@@ -274,6 +467,13 @@ final class CompoundingStore {
             ),
             context: "Verifier approval of \(override.field) correction"
         ))
+
+        if let auditEvent = order.auditEvents.last {
+            writeToSupabase { writer in
+                try await writer.cosignScanOverride(override)
+                try await writer.insertAuditEvent(orderID: orderID, event: auditEvent)
+            }
+        }
     }
 
     func removeLot(
@@ -288,6 +488,9 @@ final class CompoundingStore {
         else { return }
 
         order.components[componentIndex].utilizedLots.removeAll { $0.id == lotID }
+        writeToSupabase { writer in
+            try await writer.deleteLot(lotID: lotID)
+        }
     }
 
     // MARK: - Captures
@@ -325,7 +528,39 @@ final class CompoundingStore {
             context: "Compounding documentation photograph"
         ))
 
-        if order.status == .pending { order.status = .staging }
+        let shouldSetStaging = order.status == .pending
+        if shouldSetStaging { order.status = .staging }
+        if let auditEvent = order.auditEvents.last {
+            writeToSupabase { writer in
+                try await writer.insertCapture(orderID: orderID, capture: capture)
+                try await writer.insertAuditEvent(orderID: orderID, event: auditEvent)
+                if shouldSetStaging {
+                    try await writer.updateOrderStatus(orderID: orderID, status: .staging)
+                }
+            }
+        }
+
+        scheduleAnalysis(for: capture.id, orderID: orderID, imageURL: imageURL)
+    }
+
+    private func scheduleAnalysis(for captureID: CompoundCapture.ID, orderID: CSPOrder.ID, imageURL: URL?) {
+        guard let imageURL else { return }
+        Task { [weak self] in
+            let analysis = await ImageAnalyzer.shared.analyze(url: imageURL)
+            guard !Task.isCancelled else { return }
+            self?.storeAnalysis(analysis, orderID: orderID, captureID: captureID)
+        }
+    }
+
+    func storeAnalysis(_ analysis: CaptureAnalysis, orderID: CSPOrder.ID, captureID: CompoundCapture.ID) {
+        guard let order = order(for: orderID),
+              let captureIndex = order.captures.firstIndex(where: { $0.id == captureID }),
+              order.captures[captureIndex].analysis == nil
+        else { return }
+
+        order.captures[captureIndex].analysis = analysis
+        order.captures[captureIndex].analyzedAt = .now
+        try? modelContext.save()
     }
 
     @discardableResult
@@ -338,6 +573,9 @@ final class CompoundingStore {
         if let rem = order.remediation {
             rem.flags.removeAll { $0.captureID == captureID }
             order.remediation = rem
+        }
+        writeToSupabase { writer in
+            try await writer.deleteCapture(captureID: captureID)
         }
         return true
     }
@@ -357,6 +595,9 @@ final class CompoundingStore {
 
         let flag = CaptureFlag(captureID: captureID, x: x, y: y, createdBy: createdBy, note: note)
         order.captures[captureIndex].preparerFlags.append(flag)
+        writeToSupabase { writer in
+            try await writer.insertCaptureFlag(captureID: captureID, flag: flag)
+        }
     }
 
     func removePreparerFlag(
@@ -371,6 +612,9 @@ final class CompoundingStore {
         else { return }
 
         order.captures[captureIndex].preparerFlags.removeAll { $0.id == flagID }
+        writeToSupabase { writer in
+            try await writer.deleteCaptureFlag(flagID: flagID)
+        }
     }
 
     func setCurrentStep(orderID: CSPOrder.ID, stepIndex: Int, changedBy user: User) {
@@ -378,6 +622,10 @@ final class CompoundingStore {
         let total = order.recipeSteps.count
         guard total > 0 else { return }
         order.currentStepIndex = min(max(stepIndex, 0), total - 1)
+        let persistedStepIndex = order.currentStepIndex
+        writeToSupabase { writer in
+            try await writer.updateOrderStep(orderID: orderID, stepIndex: persistedStepIndex)
+        }
     }
 
     func advanceStep(orderID: CSPOrder.ID, changedBy user: User) {
@@ -385,17 +633,28 @@ final class CompoundingStore {
         let total = order.recipeSteps.count
         guard total > 0 else { return }
         order.currentStepIndex = min(order.currentStepIndex + 1, total - 1)
+        let persistedStepIndex = order.currentStepIndex
+        writeToSupabase { writer in
+            try await writer.updateOrderStep(orderID: orderID, stepIndex: persistedStepIndex)
+        }
     }
 
     func previousStep(orderID: CSPOrder.ID, changedBy user: User) {
         guard let order = order(for: orderID), mutationsAllowed(on: order, by: user) else { return }
         order.currentStepIndex = max(order.currentStepIndex - 1, 0)
+        let persistedStepIndex = order.currentStepIndex
+        writeToSupabase { writer in
+            try await writer.updateOrderStep(orderID: orderID, stepIndex: persistedStepIndex)
+        }
     }
 
     func beginPreparing(orderID: CSPOrder.ID, by user: User) {
         guard let order = order(for: orderID), mutationsAllowed(on: order, by: user) else { return }
         guard [.pending, .staging].contains(order.status) else { return }
         order.status = .preparing
+        writeToSupabase { writer in
+            try await writer.updateOrderStatus(orderID: orderID, status: .preparing)
+        }
     }
 
     // MARK: - Verification
@@ -404,6 +663,9 @@ final class CompoundingStore {
         guard let order = order(for: orderID), mutationsAllowed(on: order, by: user) else { return }
         order.status = .waitingForApproval
         releaseOrderLock(orderID: orderID, by: user)
+        writeToSupabase { writer in
+            try await writer.updateOrderStatus(orderID: orderID, status: .waitingForApproval)
+        }
     }
 
     func verify(
@@ -416,11 +678,12 @@ final class CompoundingStore {
         guard let order = order(for: orderID) else { return }
 
         let decision = approved ? VerificationDecision.approved : .rejected
-        order.verificationRecord = VerificationRecord(
+        let verificationRecord = VerificationRecord(
             verifiedBy: verifiedBy,
             decision: decision,
             rejectionReason: rejectionReason
         )
+        order.verificationRecord = verificationRecord
         order.status = approved ? .approved : .rejected
 
         order.auditEvents.append(AuditEvent(
@@ -432,6 +695,16 @@ final class CompoundingStore {
             ),
             context: "Final verification after review of all scans, images, and overrides"
         ))
+
+        if let auditEvent = order.auditEvents.last {
+            writeToSupabase { writer in
+                try await writer.insertVerification(orderID: orderID, record: verificationRecord)
+                try await writer.insertAuditEvent(orderID: orderID, event: auditEvent)
+                if approved {
+                    try await writer.updateOrderStatus(orderID: orderID, status: .approved)
+                }
+            }
+        }
 
         if !approved {
             createRemediationRequest(
@@ -464,6 +737,14 @@ final class CompoundingStore {
             ),
             context: "Rejected during verification; sent back to compounder for fixes"
         ))
+
+        if let auditEvent = order.auditEvents.last {
+            writeToSupabase { writer in
+                try await writer.insertRemediationRequest(orderID: orderID, remediation: remediation)
+                try await writer.insertAuditEvent(orderID: orderID, event: auditEvent)
+                try await writer.updateOrderStatus(orderID: orderID, status: .remediation)
+            }
+        }
     }
 
     // MARK: - Remediation
@@ -500,6 +781,13 @@ final class CompoundingStore {
             ),
             context: "Documenting remediation fix with photograph"
         ))
+
+        if let auditEvent = order.auditEvents.last {
+            writeToSupabase { writer in
+                try await writer.insertRemediationCapture(capture)
+                try await writer.insertAuditEvent(orderID: orderID, event: auditEvent)
+            }
+        }
     }
 
     func recordRemediationLotChange(
@@ -527,6 +815,9 @@ final class CompoundingStore {
 
         remediation.lotChanges.append(change)
         order.remediation = remediation
+        writeToSupabase { writer in
+            try await writer.insertRemediationLotChange(change)
+        }
     }
 
     func completeRemediation(orderID: CSPOrder.ID, completedBy: User) {
@@ -550,11 +841,22 @@ final class CompoundingStore {
             ),
             context: "Remediation fixes complete; resubmitted for verification"
         ))
+
+        if let auditEvent = order.auditEvents.last {
+            writeToSupabase { writer in
+                try await writer.completeRemediation(remediation)
+                try await writer.insertAuditEvent(orderID: orderID, event: auditEvent)
+                try await writer.updateOrderStatus(orderID: orderID, status: .waitingForApproval)
+            }
+        }
     }
 
     func resubmitAfterRemediation(orderID: CSPOrder.ID) {
         guard let order = order(for: orderID) else { return }
         order.status = .waitingForApproval
+        writeToSupabase { writer in
+            try await writer.updateOrderStatus(orderID: orderID, status: .waitingForApproval)
+        }
     }
 }
 

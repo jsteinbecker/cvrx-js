@@ -18,6 +18,9 @@ final class CompoundCapture {
     var imageName: String?
     /// Optional note (e.g., "labeled syringe", "vial detail").
     var note: String?
+    /// Cached Vision extraction for this image. Nil means it has not been analyzed yet.
+    var analysis: CaptureAnalysis?
+    var analyzedAt: Date?
     /// Pins placed by the preparer to highlight areas that are difficult to capture clearly.
     var preparerFlags: [CaptureFlag]
 
@@ -30,6 +33,8 @@ final class CompoundCapture {
         imageURL: URL? = nil,
         imageName: String? = nil,
         note: String? = nil,
+        analysis: CaptureAnalysis? = nil,
+        analyzedAt: Date? = nil,
         preparerFlags: [CaptureFlag] = []
     ) {
         self.id = id
@@ -40,6 +45,8 @@ final class CompoundCapture {
         self.imageURL = imageURL
         self.imageName = imageName
         self.note = note
+        self.analysis = analysis
+        self.analyzedAt = analyzedAt
         self.preparerFlags = preparerFlags
     }
     

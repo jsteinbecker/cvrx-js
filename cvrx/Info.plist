@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CVRXSupabaseURL</key>
+	<string>https://acejepxxnyjsxucwdyus.supabase.co</string>
+	<key>CVRXSupabaseAnonKey</key>
+	<string>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFjZWplcHh4bnlqc3h1Y3dkeXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM1MTg1NTksImV4cCI6MjA5OTA5NDU1OX0.6wgz0iYFyk0VKXHPGAvLlH4ggTvqNH-QJH42Y8nGo1I</string>
 	<key>NSCameraReactionEffectGesturesEnabledDefault</key>
 	<true/>
 </dict>

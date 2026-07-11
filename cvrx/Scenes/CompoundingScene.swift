@@ -5,6 +5,11 @@ import UniformTypeIdentifiers
 import UIKit
 #endif
 
+private struct PendingCompoundingStepChange: Identifiable {
+    let id = UUID()
+    let stepIndex: Int
+}
+
 struct CompoundingScene: View {
     var order: CSPOrder
     @Environment(\.currentUser) var user
@@ -25,6 +30,7 @@ struct CompoundingScene: View {
     @State private var uploadErrorMessage: String?
 
     @State private var isCapturing = false
+    @State private var pendingStepChange: PendingCompoundingStepChange?
     @State private var captureTask: Task<Void, Never>?
     @State private var lockRefreshTask: Task<Void, Never>?
     @State private var ownsSceneAcquiredLock = false
@@ -90,6 +96,23 @@ struct CompoundingScene: View {
             } message: {
                 Text(uploadErrorMessage ?? "")
             }
+            .alert(
+                "Unexpected Component",
+                isPresented: Binding(
+                    get: { pendingStepChange != nil },
+                    set: { if !$0 { pendingStepChange = nil } }
+                )
+            ) {
+                Button("Cancel", role: .cancel) { pendingStepChange = nil }
+                Button("Acknowledge") {
+                    if let stepIndex = pendingStepChange?.stepIndex {
+                        performStepChange(stepIndex)
+                    }
+                    pendingStepChange = nil
+                }
+            } message: {
+                Text(unexpectedComponentWarningText)
+            }
     }
 
     private var content: some View {
@@ -144,8 +167,13 @@ struct CompoundingScene: View {
     }
 
     private var recipeSheet: some View {
-        RecipeStepsSheet(order: order, store: store, currentUser: user, canMutate: canEditOrder)
-            .presentationDetents([.medium, .large])
+        RecipeStepsSheet(
+            order: order,
+            currentUser: user,
+            canMutate: canEditOrder,
+            onSelectStep: requestStepChange
+        )
+        .presentationDetents([.medium, .large])
     }
 
     private var capturedGridSheet: some View {
@@ -330,8 +358,26 @@ struct CompoundingScene: View {
         guard kind == .reference else { return }
         let next = order.currentStepIndex + 1
         guard next < order.totalStepCount else { return }
-        guard let user, canEditOrder else { return }
-        store.setCurrentStep(orderID: order.id, stepIndex: next, changedBy: user)
+        requestStepChange(next)
+    }
+
+    private func requestStepChange(_ stepIndex: Int) {
+        guard canEditOrder, order.recipeSteps.indices.contains(stepIndex) else { return }
+        if order.hasUnexpectedComponents {
+            pendingStepChange = PendingCompoundingStepChange(stepIndex: stepIndex)
+        } else {
+            performStepChange(stepIndex)
+        }
+    }
+
+    private func performStepChange(_ stepIndex: Int) {
+        guard let user, canEditOrder, order.recipeSteps.indices.contains(stepIndex) else { return }
+        store.setCurrentStep(orderID: order.id, stepIndex: stepIndex, changedBy: user)
+    }
+
+    private var unexpectedComponentWarningText: String {
+        let names = order.unexpectedComponents.map(\.product.name).joined(separator: ", ")
+        return "This order includes unexpected component(s): \(names). Acknowledge that these products are actually being used before changing stages."
     }
 
     private func captureFeedback(success: Bool) {
@@ -577,9 +623,9 @@ struct CircleIconButton: View {
 
 struct RecipeStepsSheet: View {
     let order: CSPOrder
-    let store: CompoundingStore
     let currentUser: User?
     var canMutate: Bool = true
+    let onSelectStep: (Int) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -588,8 +634,8 @@ struct RecipeStepsSheet: View {
             List {
                 ForEach(Array(order.recipeSteps.enumerated()), id: \.offset) { idx, step in
                     Button {
-                        guard let currentUser, canMutate else { return }
-                        store.setCurrentStep(orderID: order.id, stepIndex: idx, changedBy: currentUser)
+                        guard currentUser != nil, canMutate else { return }
+                        onSelectStep(idx)
                         dismiss()
                     } label: {
                         RecipeStepRow(

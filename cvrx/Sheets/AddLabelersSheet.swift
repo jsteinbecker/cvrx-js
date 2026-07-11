@@ -5,9 +5,11 @@ struct AddLabelersSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
+    let store: CompoundingStore
+
     @State private var operation: DatabaseOperation?
     @State private var errorMessage: String?
-    @State private var importSummary: ImportSummary?
+    @State private var importSummary: LabelerSyncSummary?
     @State private var showDeleteConfirmation = false
 
     @Query(sort: \Labeler.name)
@@ -20,20 +22,15 @@ struct AddLabelersSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
-                Text("Add Labelers to Database")
+                Text("Sync Labelers")
                     .font(.title)
                     .padding(5)
 
                 Button {
-                    Task {
-                        await importLabelers()
-                    }
+                    Task { await importLabelers() }
                 } label: {
-                    if operation == .importing {
-                        ProgressView()
-                    } else {
-                        Text(allLabelers.isEmpty ? "Import" : "Update")
-                    }
+                    if operation == .importing { ProgressView() }
+                    else { Text(allLabelers.isEmpty ? "Import" : "Update") }
                 }
                 .disabled(isWorking)
 
@@ -109,64 +106,7 @@ struct AddLabelersSheet: View {
         }
 
         do {
-            let records = try await importLabelerData()
-            let existingLabelers = try modelContext.fetch(
-                FetchDescriptor<Labeler>()
-            )
-
-            var existingByKey: [String: Labeler] = [:]
-
-            for labeler in existingLabelers {
-                let key = labeler.name.normalizedLabelerKey
-
-                if existingByKey[key] == nil {
-                    existingByKey[key] = labeler
-                }
-            }
-
-            var insertedCount = 0
-            var updatedCount = 0
-            var unchangedCount = 0
-
-            for record in records {
-                let key = record.name.normalizedLabelerKey
-
-                if let existing = existingByKey[key] {
-                    let normalizedCodes = Array(Set(record.codes)).sorted()
-
-                    let hasChanges =
-                        existing.name != record.name ||
-                        existing.fullName != record.fullName ||
-                        existing.labelerCodes != normalizedCodes
-
-                    if hasChanges {
-                        existing.name = record.name
-                        existing.fullName = record.fullName
-                        existing.labelerCodes = normalizedCodes
-                        updatedCount += 1
-                    } else {
-                        unchangedCount += 1
-                    }
-                } else {
-                    let labeler = Labeler(
-                        name: record.name,
-                        fullName: record.fullName,
-                        labelerCodes: record.codes
-                    )
-
-                    modelContext.insert(labeler)
-                    existingByKey[key] = labeler
-                    insertedCount += 1
-                }
-            }
-
-            try modelContext.save()
-
-            importSummary = ImportSummary(
-                inserted: insertedCount,
-                updated: updatedCount,
-                unchanged: unchangedCount
-            )
+            importSummary = try await store.syncLabelersFromSupabase()
         } catch is CancellationError {
             modelContext.rollback()
             errorMessage = "The import was cancelled."
@@ -193,6 +133,7 @@ struct AddLabelersSheet: View {
         do {
             try modelContext.delete(model: Labeler.self)
             try modelContext.save()
+            store.refreshLabelerLookupCache()
         } catch {
             modelContext.rollback()
             errorMessage = error.localizedDescription
@@ -205,35 +146,3 @@ private enum DatabaseOperation {
     case deleting
 }
 
-private struct ImportSummary {
-    let inserted: Int
-    let updated: Int
-    let unchanged: Int
-
-    var description: String {
-        [
-            inserted == 1
-                ? "Added 1 labeler"
-                : "Added \(inserted) labelers",
-
-            updated == 1
-                ? "updated 1"
-                : "updated \(updated)",
-
-            unchanged == 1
-                ? "1 unchanged"
-                : "\(unchanged) unchanged"
-        ]
-        .joined(separator: ", ") + "."
-    }
-}
-
-private extension String {
-    var normalizedLabelerKey: String {
-        trimmingCharacters(in: .whitespacesAndNewlines)
-            .folding(
-                options: [.caseInsensitive, .diacriticInsensitive],
-                locale: .current
-            )
-    }
-}

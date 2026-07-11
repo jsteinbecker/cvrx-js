@@ -9,15 +9,24 @@ struct VerifyComponentRow: View {
             // Header: Product name + quantity
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(component.product.name)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(component.product.name)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .lineLimit(2)
+
+                        AcceptableNDCInfoButton(
+                            productName: component.product.name,
+                            ndcs: component.product.linkedNDCs
+                        )
+                    }
                     Text("\(component.totalQuantity.formatted()) \(component.quantityUnit.rawValue)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 VerificationStatusBadge(
+                    isUnexpected: component.isUnexpected,
                     isScanned: component.isScanned,
                     isFulfilled: component.isFulfilled(),
                     hasExpired: component.utilizedLots.contains(where: \.isExpired)
@@ -48,12 +57,12 @@ struct VerifyComponentRow: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Text("\(component.quantityAccountedFor.formatted()) / \(component.totalQuantity.formatted()) \(component.quantityUnit.rawValue)")
+                    Text(component.isUnexpected ? "Unexpected product" : "\(component.quantityAccountedFor.formatted()) / \(component.totalQuantity.formatted()) \(component.quantityUnit.rawValue)")
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(component.isUnexpected ? .red : .secondary)
                 }
-                ProgressView(value: min(component.quantityAccountedFor / component.totalQuantity, 1.0))
-                    .tint(component.isFulfilled() ? .green : .blue)
+                ProgressView(value: progressValue)
+                    .tint(component.isUnexpected ? .red : (component.isFulfilled() ? .green : .blue))
             }
             
             // Add scan button
@@ -68,8 +77,13 @@ struct VerifyComponentRow: View {
         .padding(.horizontal, 12)
         .roundedPanel(
             fill: Color.clear,
-            borderColor: component.isFulfilled() ? Color.green : Color.gray.opacity(0.3)
+            borderColor: component.isUnexpected ? Color.red : (component.isFulfilled() ? Color.green : Color.gray.opacity(0.3))
         )
+    }
+
+    private var progressValue: Double {
+        guard !component.isUnexpected, component.totalQuantity > 0 else { return 1 }
+        return min(component.quantityAccountedFor / component.totalQuantity, 1.0)
     }
 }
 
@@ -141,6 +155,7 @@ struct UtilizedLotRow: View {
 }
 
 struct VerificationStatusBadge: View {
+    let isUnexpected: Bool
     let isScanned: Bool
     let isFulfilled: Bool
     let hasExpired: Bool
@@ -156,7 +171,9 @@ struct VerificationStatusBadge: View {
     }
     
     private var statusIcon: String {
-        if hasExpired {
+        if isUnexpected {
+            return "exclamationmark.triangle.fill"
+        } else if hasExpired {
             return "exclamation.circle.fill"
         } else if isFulfilled {
             return "checkmark.circle.fill"
@@ -168,7 +185,9 @@ struct VerificationStatusBadge: View {
     }
     
     private var statusLabel: String {
-        if hasExpired {
+        if isUnexpected {
+            return "Unexpected"
+        } else if hasExpired {
             return "Expired"
         } else if isFulfilled {
             return "Complete"
@@ -180,7 +199,9 @@ struct VerificationStatusBadge: View {
     }
     
     private var statusColor: Color {
-        if hasExpired {
+        if isUnexpected {
+            return .red
+        } else if hasExpired {
             return .red
         } else if isFulfilled {
             return .green

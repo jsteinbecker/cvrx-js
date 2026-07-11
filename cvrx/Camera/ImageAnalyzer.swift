@@ -239,88 +239,10 @@ actor ImageAnalyzer {
     // MARK: - GS1 Parsing
 
     private func extractGS1(from payload: String, into p: inout DetectedProduct) {
-        if payload.contains("(") {
-            // Human-readable: "(01)00312345...(17)YYMMDD(10)LOT"
-            let pattern = #/\((\d{2,4})\)([^(]*)/#
-            for match in payload.matches(of: pattern) {
-                applyGS1(
-                    ai: String(match.output.1),
-                    value: String(match.output.2).trimmingCharacters(in: .whitespaces),
-                    to: &p
-                )
-            }
-        } else {
-            // Raw GS1 with optional FNC1 group separators (U+001D)
-            for segment in payload.components(separatedBy: "\u{1D}") where !segment.isEmpty {
-                parseRawSegment(segment, into: &p)
-            }
-        }
-    }
-
-    private func parseRawSegment(_ seg: String, into p: inout DetectedProduct) {
-        // Fixed-length AIs: AI code → data field length
-        let fixed: [String: Int] = [
-            "01": 14, "02": 14,
-            "11": 6, "12": 6, "13": 6, "15": 6, "16": 6, "17": 6, "18": 6, "19": 6,
-            "20": 2
-        ]
-        // Variable-length AIs: consume the rest of the FNC1-delimited segment
-        let variable: Set<String> = ["10", "21", "22", "30", "37"]
-
-        var s = seg[...]
-        while s.count >= 2 {
-            let ai = String(s.prefix(2))
-            if let len = fixed[ai] {
-                guard s.count >= 2 + len else { break }
-                applyGS1(ai: ai, value: String(s.dropFirst(2).prefix(len)), to: &p)
-                s = s.dropFirst(2 + len)
-            } else if variable.contains(ai) {
-                applyGS1(ai: ai, value: String(s.dropFirst(2)), to: &p)
-                break
-            } else {
-                s = s.dropFirst(1)
-            }
-        }
-    }
-
-    private func applyGS1(ai: String, value: String, to p: inout DetectedProduct) {
-        switch ai {
-        case "01": p.detectedNDC        = p.detectedNDC        ?? ndcFromGTIN(value)
-        case "10": if !value.isEmpty { p.detectedLot = p.detectedLot ?? value }
-        case "17": p.detectedExpiration = p.detectedExpiration ?? gs1Date(value)
-        default:   break
-        }
-    }
-
-    /// Extracts the 11-digit NDC from a 14-digit GTIN.
-    /// Pharma GTIN-14 = indicator(1) + NDC-11(11) + check(1) → drop first 2, drop last 1.
-    private func ndcFromGTIN(_ gtin: String) -> String? {
-        guard gtin.count == 14, gtin.allSatisfy(\.isNumber) else { return nil }
-        return String(gtin.dropFirst(2).dropLast(1))
-    }
-
-    /// Parses a GS1 YYMMDD date. Day "00" means last day of month per GS1 spec.
-    private func gs1Date(_ yymmdd: String) -> Date? {
-        guard yymmdd.count == 6,
-              let yy = Int(yymmdd.prefix(2)),
-              let mm = Int(yymmdd.dropFirst(2).prefix(2)),
-              let dd = Int(yymmdd.dropFirst(4))
-        else { return nil }
-        let year = yy < 50 ? 2000 + yy : 1900 + yy
-        let cal = Calendar(identifier: .gregorian)
-        var comps = DateComponents()
-        comps.year = year
-        comps.month = mm
-        if dd == 0 {
-            comps.day = 1
-            guard let first = cal.date(from: comps),
-                  let days = cal.range(of: .day, in: .month, for: first)?.count
-            else { return nil }
-            comps.day = days
-        } else {
-            comps.day = dd
-        }
-        return cal.date(from: comps)
+        let parsed = GS1BarcodeParser.parse(payload)
+        p.detectedNDC = p.detectedNDC ?? parsed.detectedNDC
+        p.detectedLot = p.detectedLot ?? parsed.detectedLot
+        p.detectedExpiration = p.detectedExpiration ?? parsed.detectedExpiration
     }
 
     // MARK: - OCR Pattern Extraction

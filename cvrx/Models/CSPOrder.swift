@@ -108,6 +108,14 @@ final class CSPOrder {
         !components.isEmpty && unfulfilledComponents.isEmpty
     }
 
+    var unexpectedComponents: [CompoundComponent] {
+        components.filter(\.isUnexpected)
+    }
+
+    var hasUnexpectedComponents: Bool {
+        !unexpectedComponents.isEmpty
+    }
+
     var captureMutationsAllowed: Bool {
         switch status {
         case .pending, .staging, .preparing, .remediation: return true

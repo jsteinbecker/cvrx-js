@@ -30,8 +30,13 @@ private struct DraftLotEntry: Identifiable {
             && mfg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    var requiresScannedDetails: Bool {
+        !(barcodeValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var isValid: Bool {
         !lotNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (!requiresScannedDetails || hasExpiration)
             && (parsedQuantity ?? 0) > 0
             && !isExpired
     }
@@ -41,13 +46,14 @@ private struct DraftLotEntry: Identifiable {
         if lotNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return .lot(id)
         }
+        if requiresScannedDetails && !hasExpiration {
+            return .exp(id)
+        }
         if (parsedQuantity ?? 0) <= 0 {
             return .qty(id)
         }
-        // isExpired is shown as an inline warning; caller decides whether to
-        // block or let the user fix via the date picker — surface lot focus.
         if isExpired {
-            return .lot(id)
+            return .exp(id)
         }
         return nil
     }
@@ -58,6 +64,7 @@ struct ComponentRow: View {
     var canMutate: Bool
     let onAddLot: (CompoundUtilizedLot) -> Void
     let onRemoveLot: (CompoundUtilizedLot) -> Void
+    var onRemoveComponent: (() -> Void)? = nil
     var onOverrideLot: ((CompoundUtilizedLot) -> Void)? = nil
     var onMutate: ((CompoundComponent) -> Void)? = nil
 
@@ -74,16 +81,16 @@ struct ComponentRow: View {
     static let quantityTolerance = 0.001
 
     enum Cell: Hashable {
-        case lot(UUID), qty(UUID), mfg(UUID)
+        case lot(UUID), exp(UUID), qty(UUID), mfg(UUID)
 
         var draftID: UUID {
             switch self {
-            case let .lot(id), let .qty(id), let .mfg(id): id
+            case let .lot(id), let .exp(id), let .qty(id), let .mfg(id): id
             }
         }
     }
 
-    private enum Status { case empty, scannedIncomplete, insufficient, sufficient, over }
+    private enum Status { case unexpected, empty, scannedIncomplete, insufficient, sufficient, over }
 
     private var isCompact: Bool {
         #if os(iOS)
@@ -124,7 +131,7 @@ struct ComponentRow: View {
             .onAppear {
                 guard !didInit else { return }
                 didInit = true
-                if canMutate && component.utilizedLots.isEmpty {
+                if canMutate && !component.isUnexpected && component.utilizedLots.isEmpty {
                     addDraft()
                 }
             }
@@ -172,16 +179,27 @@ struct ComponentRow: View {
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(component.product.name)
-                    .font(.body.weight(.medium))
-                    .lineLimit(2)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(component.product.name)
+                        .font(.body.weight(.medium))
+                        .lineLimit(2)
+
+                    AcceptableNDCInfoButton(
+                        productName: component.product.name,
+                        ndcs: component.product.linkedNDCs
+                    )
+                }
 
                 HStack(spacing: 6) {
                     Text("Need \(Self.format(component.totalQuantity)) \(unit)")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
 
-                    if !component.utilizedLots.isEmpty {
+                    if component.isUnexpected {
+                        Text("Unexpected")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.red)
+                    } else if !component.utilizedLots.isEmpty {
                         Text("·").font(.caption).foregroundStyle(.tertiary)
                         Text(progressText)
                             .font(.caption.weight(.semibold).monospacedDigit())
@@ -195,7 +213,18 @@ struct ComponentRow: View {
                 }
             }
             Spacer()
-            if shouldShowEditToggle { editToggle }
+            if component.isUnexpected {
+                Button(role: .destructive, action: { onRemoveComponent?() }) {
+                    Image(systemName: "trash.fill")
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(!canMutate || onRemoveComponent == nil)
+                .accessibilityLabel("Delete unexpected component")
+            } else if shouldShowEditToggle {
+                editToggle
+            }
         }
     }
 
@@ -220,7 +249,7 @@ struct ComponentRow: View {
     }
 
     private var shouldShowEditToggle: Bool {
-        canMutate && (isEditing || (drafts.isEmpty && !component.utilizedLots.isEmpty))
+        canMutate && !component.isUnexpected && (isEditing || (drafts.isEmpty && !component.utilizedLots.isEmpty))
     }
 
     // MARK: - Lot table
@@ -284,6 +313,7 @@ struct ComponentRow: View {
     private var columnHeader: some View {
         GridRow {
             columnLabel("DOSE UTILIZED")
+            EmptyView()
             columnLabel("LOT/BATCH #")
             columnLabel("EXPIRY")
             columnLabel("MANUFACTURER")
@@ -307,9 +337,7 @@ struct ComponentRow: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
             }
-            
-            Spacer(minLength: 1)
-            
+            EmptyView()
             HStack(spacing: 6) {
                 Image(systemName: lotIconName(for: lot))
                     .font(.caption)
@@ -318,7 +346,6 @@ struct ComponentRow: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(lotRequiresDetails(lot) ? .blue : .primary)
             }
-            
             HStack(spacing: 4) {
                 Text(lot.expiration.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? (lotRequiresDetails(lot) ? "Add expiry" : "—"))
                     .font(.caption)
@@ -338,7 +365,16 @@ struct ComponentRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             
-            Color.clear.frame(width: 28)
+            if lotRequiresDetails(lot), canMutate {
+                Button { editCommitted(lot) } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.body)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Edit lot details")
+            } else {
+                Color.clear.frame(width: 28)
+            }
         }
     }
 
@@ -353,6 +389,14 @@ struct ComponentRow: View {
                     .foregroundStyle(lotRequiresDetails(lot) ? .blue : .primary)
                     .lineLimit(1)
                 Spacer()
+                if lotRequiresDetails(lot), canMutate {
+                    Button { editCommitted(lot) } label: {
+                        Image(systemName: "square.and.pencil")
+                            .font(.body)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Edit lot details")
+                }
                 // Quantity badge
                 HStack(spacing: 2) {
                     Text(Self.format(lot.strengthQuantity))
@@ -421,18 +465,18 @@ struct ComponentRow: View {
         var draft = DraftLotEntry()
         draft.barcodeValue = lot.barcodeValue
         draft.lotNumber = lot.lot
-        draft.hasExpiration = lot.expiration != nil
+        draft.hasExpiration = lot.expiration != nil || lotRequiresDetails(lot)
         if let exp = lot.expiration { draft.expiration = exp }
         draft.mfg = lot.mfg ?? ""
         draft.quantityText = Self.format(lot.strengthQuantity)
-        
+
         // 3. Insert and focus
         drafts.append(draft)
         isEditing = true
-        
-        // Slight delay ensures the UI has rendered the new text fields before focusing
+
+        // Slight delay ensures the UI has rendered the new text fields before focusing.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            focus = .qty(draft.id)
+            focus = draft.firstInvalidCell ?? .qty(draft.id)
         }
     }
 
@@ -444,7 +488,8 @@ struct ComponentRow: View {
     private func handleSubmit(from cell: Cell) {
         switch cell {
         case .qty(let id): focus = .lot(id)
-        case .lot(let id): focus = .mfg(id)
+        case .lot(let id): focus = .exp(id)
+        case .exp(let id): focus = .mfg(id)
         case .mfg(let id): commitDraft(id: id)
         }
     }
@@ -640,11 +685,13 @@ struct ComponentRow: View {
 
     @ViewBuilder
     private func expiryCell(_ draft: Binding<DraftLotEntry>) -> some View {
-        if draft.wrappedValue.hasExpiration {
+        let entry = draft.wrappedValue
+        if entry.hasExpiration {
             HStack(spacing: 2) {
                 DatePicker("", selection: draft.expiration, displayedComponents: .date)
                     .datePickerStyle(.compact)
                     .labelsHidden()
+                    .focused($focus, equals: .exp(entry.id))
                 Button { draft.wrappedValue.hasExpiration = false } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.caption2)
@@ -653,9 +700,12 @@ struct ComponentRow: View {
                 .buttonStyle(.borderless)
             }
         } else {
-            Button("Set date") { draft.wrappedValue.hasExpiration = true }
-                .font(.caption)
-                .buttonStyle(.borderless)
+            Button("Set date") {
+                draft.wrappedValue.hasExpiration = true
+                focus = .exp(entry.id)
+            }
+            .font(.caption)
+            .buttonStyle(.borderless)
         }
     }
     
@@ -687,7 +737,7 @@ struct ComponentRow: View {
     /// aren't included since they must be pulled into a draft via
     /// `editCommitted` before they're focusable.
     private var focusOrder: [Cell] {
-        drafts.flatMap { [Cell.qty($0.id), .lot($0.id), .mfg($0.id)] }
+        drafts.flatMap { [Cell.qty($0.id), .lot($0.id), .exp($0.id), .mfg($0.id)] }
     }
 
     private func moveFocus(by offset: Int) {
@@ -776,6 +826,7 @@ struct ComponentRow: View {
     }
 
     private var status: Status {
+        if component.isUnexpected { return .unexpected }
         if hasScannedLotNeedingDetails { return .scannedIncomplete }
         let drawn = component.quantityAccountedFor
         let target = component.totalQuantity
@@ -787,6 +838,7 @@ struct ComponentRow: View {
 
     private var statusColor: Color {
         switch status {
+        case .unexpected:   .red
         case .empty:        .secondary
         case .scannedIncomplete: .blue
         case .insufficient: .orange
@@ -797,6 +849,7 @@ struct ComponentRow: View {
 
     private var iconName: String {
         switch status {
+        case .unexpected: "exclamationmark.triangle.fill"
         case .sufficient: "checkmark.circle.fill"
         case .over:       "exclamationmark.circle.fill"
         case .scannedIncomplete: "barcode.viewfinder"

@@ -236,6 +236,7 @@ struct ComponentsCard: View {
     var canMutate: Bool = true
     let onAddLot: (CompoundComponent, CompoundUtilizedLot) -> Void
     let onRemoveLot: (CompoundComponent, CompoundUtilizedLot) -> Void
+    var onRemoveComponent: ((CompoundComponent) -> Void)? = nil
     var onOverrideLot: ((CompoundComponent, CompoundUtilizedLot) -> Void)? = nil
 
     var body: some View {
@@ -277,6 +278,7 @@ struct ComponentsCard: View {
                     canMutate: canMutate,
                     onAddLot: { onAddLot(component, $0) },
                     onRemoveLot: { onRemoveLot(component, $0) },
+                    onRemoveComponent: removeHandler(for: component),
                     onOverrideLot: overrideHandler(for: component)
                 )
                 .padding(.horizontal, 4)
@@ -298,6 +300,11 @@ struct ComponentsCard: View {
                 .padding(.top, 8)
                 .padding(.bottom, 14)
         }
+    }
+
+    private func removeHandler(for component: CompoundComponent) -> (() -> Void)? {
+        guard component.isUnexpected, let onRemoveComponent else { return nil }
+        return { onRemoveComponent(component) }
     }
 
     private func overrideHandler(
@@ -351,7 +358,8 @@ struct ComponentsCard: View {
 
     private var hasUnexpectedComponentState: Bool {
         order.components.contains { component in
-            component.hasPendingOverrides
+            component.isUnexpected
+                || component.hasPendingOverrides
                 || component.utilizedLots.contains(where: \.isExpired)
                 || component.quantityAccountedFor > component.totalQuantity + ComponentRow.quantityTolerance
         }
@@ -380,6 +388,8 @@ struct CurrentStepCard: View {
     let store: CompoundingStore
     let currentUser: User?
     var canMutate: Bool = true
+    let onPreviousStep: () -> Void
+    let onNextStep: () -> Void
 
     @State private var isCompoundingPresented = false
 
@@ -467,13 +477,13 @@ struct CurrentStepCard: View {
     }
 
     private func goToPreviousStep() {
-        guard canGoBackward, canMutate, let currentUser else { return }
-        store.previousStep(orderID: order.id, changedBy: currentUser)
+        guard canGoBackward, canMutate, currentUser != nil else { return }
+        onPreviousStep()
     }
 
     private func goToNextStep() {
-        guard canGoForward, canMutate, let currentUser else { return }
-        store.advanceStep(orderID: order.id, changedBy: currentUser)
+        guard canGoForward, canMutate, currentUser != nil else { return }
+        onNextStep()
     }
 
     private func openCompounding() {

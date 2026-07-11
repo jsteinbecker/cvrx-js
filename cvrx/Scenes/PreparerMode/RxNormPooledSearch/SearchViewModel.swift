@@ -46,6 +46,7 @@ final class SearchViewModel {
     // MARK: - SwiftData context (injected from App)
 
     var modelContext: ModelContext?
+    var facilityID: String?
 
     // MARK: - Search entry point (mirrors doSearch with debounce)
 
@@ -264,6 +265,7 @@ final class SearchViewModel {
                     importedRxCUI: node.concept.rxcui,
                     importedTTY: node.concept.tty.rawValue,
                     importedAt: .now,
+                    facilityID: facilityID,
                     strength: 0,
                     strengthUnit: .unitless
                 )
@@ -274,6 +276,7 @@ final class SearchViewModel {
                 product.importedRxCUI = node.concept.rxcui
                 product.importedTTY = node.concept.tty.rawValue
                 product.importedAt = .now
+                product.facilityID = facilityID
 
                 try ctx.save()
                 let added = product.linkedNDCs.count - before

@@ -286,6 +286,10 @@ struct CaptureViewerSheet: View {
     var onAddPreparerPin: ((Double, Double, String?) -> Void)? = nil
     /// Called when the creating user deletes an existing pin.
     var onRemovePreparerPin: ((CaptureFlag) -> Void)? = nil
+    /// Persists analysis generated as a fallback for older captures.
+    var onStoreAnalysis: ((CaptureAnalysis) -> Void)? = nil
+    /// Applies extracted product data to the order's lot rows.
+    var onApplyDetectedProduct: ((CaptureAnalysis.DetectedProduct) -> Void)? = nil
 
     @State private var showDeleteConfirm = false
     @State private var selectedPin: CaptureFlag? = nil
@@ -591,9 +595,15 @@ struct CaptureViewerSheet: View {
     // MARK: - Image Analysis
 
     private func runAnalysis() async {
+        if let cachedAnalysis = capture.analysis {
+            captureAnalysis = cachedAnalysis
+            return
+        }
         guard let url = capture.imageURL else { return }
         isAnalyzing = true
-        captureAnalysis = await ImageAnalyzer.shared.analyze(url: url)
+        let analysis = await ImageAnalyzer.shared.analyze(url: url)
+        captureAnalysis = analysis
+        onStoreAnalysis?(analysis)
         isAnalyzing = false
     }
 
@@ -611,7 +621,7 @@ struct CaptureViewerSheet: View {
             .padding(.vertical, 8)
             .background(.bar)
         } else if let a = captureAnalysis, a.hasAnyData {
-            CaptureAnalysisPanel(analysis: a)
+            CaptureAnalysisPanel(analysis: a, onApplyDetectedProduct: onApplyDetectedProduct)
         }
     }
 }
@@ -620,6 +630,7 @@ struct CaptureViewerSheet: View {
 
 struct CaptureAnalysisPanel: View {
     let analysis: CaptureAnalysis
+    var onApplyDetectedProduct: ((CaptureAnalysis.DetectedProduct) -> Void)? = nil
     @State private var expanded = false
 
     var body: some View {
@@ -695,7 +706,18 @@ struct CaptureAnalysisPanel: View {
     private var detailsScroll: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if analysis.hasParsedData {
+                if !analysis.products.isEmpty {
+                    analysisSection("Detected Products") {
+                        ForEach(analysis.products) { product in
+                            DetectedProductCard(
+                                product: product,
+                                onApply: onApplyDetectedProduct.map { apply in
+                                    { apply(product) }
+                                }
+                            )
+                        }
+                    }
+                } else if analysis.hasParsedData {
                     analysisSection("Detected Pharmaceutical Data") {
                         if let ndc = analysis.detectedNDC {
                             AnalysisDetailRow(icon: "number", label: "NDC", value: ndc)
@@ -765,6 +787,45 @@ struct CaptureAnalysisPanel: View {
                 .foregroundStyle(.secondary)
             content()
         }
+    }
+}
+
+struct DetectedProductCard: View {
+    let product: CaptureAnalysis.DetectedProduct
+    var onApply: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
+                if let ndc = product.detectedNDC {
+                    AnalysisDetailRow(icon: "number", label: "NDC", value: ndc)
+                }
+                if let lot = product.detectedLot {
+                    AnalysisDetailRow(icon: "tag", label: "Lot", value: lot)
+                }
+                if let exp = product.detectedExpiration {
+                    AnalysisDetailRow(
+                        icon: "calendar",
+                        label: "Expiration",
+                        value: exp.formatted(date: .abbreviated, time: .omitted)
+                    )
+                }
+                if let payload = product.sourceBarcodePayload {
+                    AnalysisDetailRow(icon: "barcode.viewfinder", label: "Barcode", value: String(payload.prefix(60)))
+                }
+            }
+
+            if let onApply {
+                Button(action: onApply) {
+                    Label("Apply to Lot Rows", systemImage: "text.badge.checkmark")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 

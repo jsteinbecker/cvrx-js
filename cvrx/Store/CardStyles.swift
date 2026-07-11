@@ -139,6 +139,72 @@ struct MetaPill: View {
     }
 }
 
+struct AcceptableNDCInfoButton: View {
+    let productName: String
+    let ndcs: [String]
+
+    @State private var isShowingPopover = false
+
+    var body: some View {
+        Button {
+            isShowingPopover.toggle()
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.caption)
+                .frame(width: 22, height: 22)
+                .foregroundStyle(.secondary)
+                .opacity(0.55)
+        }
+        .buttonStyle(.plain)
+        .help("Show acceptable NDCs")
+        .accessibilityLabel("Show acceptable NDCs for \(productName)")
+        .popover(isPresented: $isShowingPopover) {
+            AcceptableNDCPopover(productName: productName, ndcs: ndcs)
+        }
+    }
+}
+
+private struct AcceptableNDCPopover: View {
+    let productName: String
+    let ndcs: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Acceptable NDCs")
+                    .font(.subheadline.weight(.semibold))
+                Text(productName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Divider()
+
+            if ndcs.isEmpty {
+                Text("No acceptable NDCs linked.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(ndcs.enumerated()), id: \.offset) { _, ndc in
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.caption2)
+                                .foregroundStyle(Color.green)
+                            Text(ndc)
+                                .font(.caption.monospacedDigit())
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 260, alignment: .leading)
+    }
+}
+
 struct PillLabel: View {
     let text: String
     var systemImage: String? = nil

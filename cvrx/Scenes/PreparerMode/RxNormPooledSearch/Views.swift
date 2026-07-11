@@ -30,6 +30,7 @@ private extension Color {
 struct RxNormSearchView: View {
     @State var vm = SearchViewModel()
     @Environment(\.modelContext) var ctx
+    @Environment(\.currentUser) private var currentUser
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,7 +39,13 @@ struct RxNormSearchView: View {
             TabContentView(vm: vm)
         }
         .background(Color.rxGroupedBackground.ignoresSafeArea())
-        .onAppear { vm.modelContext = ctx }
+        .onAppear {
+            vm.modelContext = ctx
+            vm.facilityID = currentUser?.facilityID
+        }
+        .onChange(of: currentUser?.facilityID) { _, facilityID in
+            vm.facilityID = facilityID
+        }
     }
 }
 
@@ -543,38 +550,37 @@ struct NDCPanelView: View {
         case .loaded:
             if let result = node.ndcResult {
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 6) {
-                        Text("\(result.ndcs.count) NDC\(result.ndcs.count == 1 ? "" : "s")")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(Color.secondary.opacity(0.10))
-                            .clipShape(Capsule())
-                            .overlay(Capsule().stroke(Color.border))
-                            .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 8) {
+                            Text("\(result.ndcs.count) NDC\(result.ndcs.count == 1 ? "" : "s")")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 7).padding(.vertical, 3)
+                                .background(Color.secondary.opacity(0.10))
+                                .clipShape(Capsule())
+                                .overlay(Capsule().stroke(Color.border))
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 8)
+                            Button {
+                                vm.importProduct(from: node)
+                            } label: {
+                                Label(vm.importingNodeID == node.id ? "Importing" : "Import", systemImage: "tray.and.arrow.down")
+                            }
+                            .font(.caption.weight(.semibold))
+                            .controlSize(.small)
+                            .buttonStyle(.bordered)
+                            .disabled(result.ndcs.isEmpty || vm.importingNodeID == node.id)
+                        }
                         Text(result.path)
                             .font(.caption2.italic())
                             .foregroundStyle(.secondary)
-                        Spacer(minLength: 8)
-                        Button {
-                            vm.importProduct(from: node)
-                        } label: {
-                            Label(vm.importingNodeID == node.id ? "Importing" : "Import", systemImage: "tray.and.arrow.down")
-                        }
-                        .font(.caption.weight(.semibold))
-                        .controlSize(.small)
-                        .buttonStyle(.bordered)
-                        .disabled(result.ndcs.isEmpty || vm.importingNodeID == node.id)
+                            .lineLimit(2)
                     }
                     if !vm.importSummary.isEmpty {
                         Text(vm.importSummary)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
-                    FlowLayout(spacing: 5) {
-                        ForEach(result.ndcs, id: \.self) { ndc in
-                            NDCChipView(ndc: ndc, vm: vm)
-                        }
-                    }
+                    NDCCollectionView(ndcs: result.ndcs, vm: vm)
                 }
                 .padding(.vertical, 10)
                 .padding(.trailing, 12)
@@ -593,14 +599,69 @@ struct NDCPanelView: View {
     }
 }
 
+struct NDCCollectionView: View {
+    let ndcs: [String]
+    @Bindable var vm: SearchViewModel
+
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: 112, maximum: 150), spacing: 6, alignment: .leading)]
+    }
+
+    var body: some View {
+        Group {
+            if ndcs.isEmpty {
+                Text("No linked NDCs returned")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
+                        ForEach(ndcs, id: \.self) { ndc in
+                            NDCChipView(ndc: ndc, vm: vm)
+                        }
+                    }
+                    .padding(8)
+                }
+                .frame(maxHeight: ndcs.count > 18 ? 172 : nil)
+                .scrollIndicators(ndcs.count > 18 ? .visible : .hidden)
+                .background(Color.rxCardBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.border, lineWidth: 0.5)
+                }
+            }
+        }
+    }
+}
+
 struct NDCChipView: View {
     let ndc: String; @Bindable var vm: SearchViewModel
-    @State private var isSelected = false
+
+    private var isSelected: Bool {
+        vm.selectedNDC?.ndc == ndc
+    }
+
+    private var selectedNDCBinding: Binding<NDCInfo?> {
+        Binding(
+            get: { isSelected ? vm.selectedNDC : nil },
+            set: { newValue in
+                if let newValue {
+                    vm.selectedNDC = newValue
+                } else if isSelected {
+                    vm.selectedNDC = nil
+                }
+            }
+        )
+    }
 
     var body: some View {
         Button {
-            isSelected.toggle()
-            if isSelected { Task { await vm.loadNDCInfo(ndc) } }
+            if isSelected {
+                vm.selectedNDC = nil
+            } else {
+                Task { await vm.loadNDCInfo(ndc) }
+            }
         } label: {
             Text(ndc)
                 .font(.system(size: 11, design: .monospaced))
@@ -612,37 +673,95 @@ struct NDCChipView: View {
                 .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(isSelected ? Color.brand.opacity(0.7) : Color.border, lineWidth: 0.5))
         }
         .buttonStyle(.plain)
-        .sheet(item: $vm.selectedNDC) { info in
-            NDCPopoverSheet(info: info)
-                .presentationDetents([.height(160)])
-                .presentationDragIndicator(.visible)
+        .popover(item: selectedNDCBinding) { info in
+            NDCPopoverSheet(info: info) {
+                vm.selectedNDC = nil
+            }
+            .frame(width: 340, height: 220)
+            .presentationCompactAdaptation(.popover)
         }
     }
 }
 
 struct NDCPopoverSheet: View {
     let info: NDCInfo
+    var onDismiss: () -> Void = {}
+
+    @Query private var labelers: [Labeler]
+
+    private var labelerName: String? {
+        let candidateCodes = LabelerCodeLookup.candidateCodes(forNDC: info.ndc)
+        return labelers.first { labeler in
+            guard !labeler.hidden else { return false }
+            let labelerCodes = Set(labeler.labelerCodes.map { $0.filter(\.isNumber) })
+            return candidateCodes.contains { labelerCodes.contains($0) }
+        }?.name
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(info.ndc)
-                .font(.system(size: 11, design: .monospaced))
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(info.ndc)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .textSelection(.enabled)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    onDismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-            if let name = info.productName {
-                Text(name).font(.system(size: 14)).foregroundStyle(Color.primary)
-            } else {
-                Text("Name unavailable").font(.system(size: 14).italic()).foregroundStyle(Color.secondary)
+                .accessibilityLabel("Close NDC details")
             }
-            if let status = info.status {
-                let active = info.marketed ?? false
-                Text(status + (active ? " · marketed" : " · not marketed"))
-                    .font(.system(size: 11))
-                    .foregroundStyle(status == "ACTIVE" ? Color.pillGreen : .red)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    DetailBlock(title: "Product", value: info.productName ?? "Name unavailable")
+
+                    if let labelerName {
+                        DetailBlock(title: "Labeler", value: labelerName)
+                    }
+
+                    if let status = info.status {
+                        let active = info.marketed ?? false
+                        HStack(spacing: 6) {
+                            Text(status)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(status == "ACTIVE" ? Color.pillGreen : .red)
+                            Text(active ? "Marketed" : "Not marketed")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Spacer()
+            .scrollIndicators(.visible)
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
         .background(Color.rxGroupedBackground)
+    }
+}
+
+private struct DetailBlock: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title.uppercased())
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.callout)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

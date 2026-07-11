@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 
-struct CaptureAnalysis: Equatable, Sendable {
+struct CaptureAnalysis: Codable, Equatable, Sendable {
     var barcodes: [DetectedBarcode] = []
     var recognizedLines: [String] = []
     var imageCategories: [String] = []
@@ -31,7 +31,7 @@ struct CaptureAnalysis: Equatable, Sendable {
     var detectedLot: String?        { products.count == 1 ? products[0].detectedLot : nil }
     var detectedExpiration: Date?   { products.count == 1 ? products[0].detectedExpiration : nil }
 
-    struct DetectedBarcode: Equatable, Sendable {
+    struct DetectedBarcode: Codable, Equatable, Sendable {
         var symbology: String
         var payload: String
         var isGS1: Bool
@@ -40,7 +40,7 @@ struct CaptureAnalysis: Equatable, Sendable {
     }
 
     /// One physical product detected in the frame, with the label data associated to it.
-    struct DetectedProduct: Identifiable, Equatable, Sendable {
+    struct DetectedProduct: Codable, Identifiable, Equatable, Sendable {
         let id: UUID
         var detectedNDC: String?
         var detectedLot: String?

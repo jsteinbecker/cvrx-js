@@ -248,69 +248,89 @@ private extension MockData {
 private extension MockData {
     
     static func sodiumChlorideVial() -> Product {
-        Product(name: "0.9% Sodium Chloride 20 mL vial", linkedNDCs: ["00000-1000-01"],
+        Product(name: "0.9% Sodium Chloride 20 mL vial", linkedNDCs: ["63323-0186-20"],
                 strength: 9, strengthUnit: .mg)
     }
     
     static func daptomycinVial500mg() -> Product {
-        Product(name: "Daptomycin 500 mL vial", linkedNDCs: ["00000-2000-01"],
-                strength: 9, strengthUnit: .mg)
+        Product(name: "Daptomycin 500 mg vial", linkedNDCs: ["00054-0479-25"],
+                strength: 500, strengthUnit: .mg)
     }
     
     static func vancoVial1g() -> Product {
-        Product(name: "Vancomycin 1 g vial", linkedNDCs: ["00000-0001-01"],
+        Product(name: "Vancomycin 1 g vial", linkedNDCs: ["67457-0367-10"],
                 strength: 1, strengthUnit: .g)
     }
     
     static func vancoVial500mg() -> Product {
-        Product(name: "Vancomycin 500 mg vial", linkedNDCs: ["00000-0005-01"],
+        Product(name: "Vancomycin 500 mg vial", linkedNDCs: ["67457-0366-10"],
                 strength: 500, strengthUnit: .mg)
     }
     
     static func cefepimeVial2g() -> Product {
-        Product(name: "Cefepime 2 g vial", linkedNDCs: ["00000-0200-01"],
+        Product(name: "Cefepime 2 g vial", linkedNDCs: ["0143-9859-10"],
                 strength: 2, strengthUnit: .g)
     }
     
     static func avycazVial2_5g() -> Product {
-        Product(name: "Ceftazidime-Tazobactam 2.5g vial", linkedNDCs: ["00000-0201-01"],
+        Product(name: "Avycaz 2.5 g vial", linkedNDCs: ["00456-2700-10"],
                 strength: 2.5, strengthUnit: .g)
     }
     
     static func zosynVial4_5g() -> Product {
-        Product(name: "Piperacillin-Tazobactam 4.5 g vial", linkedNDCs: ["00000-0450-01"],
+        Product(name: "Piperacillin-Tazobactam 4.5 g vial", linkedNDCs: ["0206-8862-02"],
                 strength: 4.5, strengthUnit: .g)
     }
     
     static func meropenemVial1g() -> Product {
-        Product(name: "Meropenem 1 g vial", linkedNDCs: ["00000-0100-01"],
+        Product(name: "Meropenem 1 g vial", linkedNDCs: ["63323-0508-20"],
                 strength: 1, strengthUnit: .g)
     }
     
     static func ondansetronVial4mg() -> Product {
-        Product(name: "Ondansetron 4 mg/2 mL vial", linkedNDCs: ["00000-0040-02"],
+        Product(name: "Ondansetron 4 mg/2 mL vial", linkedNDCs: ["0641-6078-01"],
                 strength: 4, strengthUnit: .mg, mlConcentration: 2)
     }
     
     static func swfiVial() -> Product {
-        Product(name: "Sterile Water for Injection 10 mL", linkedNDCs: ["00000-0010-10"],
+        Product(name: "Sterile Water for Injection 10 mL", linkedNDCs: ["0409-4887-10"],
                 strength: 10, strengthUnit: .mL, mlConcentration: 10)
     }
     
     static func nsBag(volume: Int) -> Product {
-        Product(name: "0.9% Sodium Chloride \(volume) mL bag",
-                linkedNDCs: [String(format: "00000-0%03d-10", volume)],
+        let ndc: String
+        switch volume {
+        case 50: ndc = "0338-0049-41"
+        case 100: ndc = "0338-0049-38"
+        case 250: ndc = "0338-0049-02"
+        default: ndc = String(format: "0338-0%04d-10", volume)
+        }
+
+        return Product(name: "0.9% Sodium Chloride \(volume) mL bag",
+                linkedNDCs: [ndc],
                 strength: 0.9, strengthUnit: .g, mlConcentration: 100)
     }
     
     static func daptoVial500mg() -> Product {
-        Product(name: "Daptomycin 500 mg vial", linkedNDCs: ["00000-0050-01"],
+        Product(name: "Daptomycin 500 mg vial", linkedNDCs: ["00054-0479-25"],
                 strength: 500, strengthUnit: .mg, mlConcentration: 50)
     }
     
     static func daptoVial350mg() -> Product {
-        Product(name: "Daptomycin 500 mg vial", linkedNDCs: ["00000-0050-01"],
+        Product(name: "Daptomycin 350 mg vial", linkedNDCs: ["00054-0478-25"],
                 strength: 350, strengthUnit: .mg, mlConcentration: 50)
+    }
+}
+
+// MARK: - Scan Simulation
+
+extension MockData {
+    static let simulatedIncorrectBarcode = "01099999999999101799123110WRONGLOT"
+
+    static func simulatedCorrectBarcode(for product: Product, lot: String = "SIMLOT1") -> String {
+        let ndc = product.linkedNDCs.first ?? "99999-9999-99"
+        let digits = ndc.filter(\.isNumber)
+        return "0103\(digits)1729123110\(lot)"
     }
 }
 

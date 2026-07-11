@@ -6,6 +6,18 @@ private struct LotOverrideContext: Identifiable {
     let lot: CompoundUtilizedLot
 }
 
+private struct PendingStageChange: Identifiable {
+    let id = UUID()
+    let destination: StageDestination
+}
+
+private enum StageDestination {
+    case previousStep
+    case nextStep
+    case step(Int)
+    case verification
+}
+
 private struct OrderLockStatusBanner: View {
     let systemImage: String
     let title: String
@@ -94,6 +106,8 @@ struct OrderDetailScene: View {
     @State private var lotOverrideContext: LotOverrideContext?
     @State private var scannerBarcodeInput = ""
     @State private var isManualBarcodeInputVisible = false
+    @State private var isBarcodeScannerPresented = false
+    @State private var pendingStageChange: PendingStageChange?
     @State private var lockRefreshTask: Task<Void, Never>?
     @FocusState private var barcodeInputFocused: Bool
 
@@ -117,12 +131,20 @@ struct OrderDetailScene: View {
                         canMutate: canEditOrder,
                         onAddLot: addLot,
                         onRemoveLot: removeLot,
+                        onRemoveComponent: removeUnexpectedComponent,
                         onOverrideLot: overrideLotHandler
                     )
                     .padding(2)
                     
-                    CurrentStepCard(order: order, store: store, currentUser: currentUser, canMutate: canEditOrder)
-                        .padding(2)
+                    CurrentStepCard(
+                        order: order,
+                        store: store,
+                        currentUser: currentUser,
+                        canMutate: canEditOrder,
+                        onPreviousStep: { requestStageChange(.previousStep) },
+                        onNextStep: { requestStageChange(.nextStep) }
+                    )
+                    .padding(2)
                     
                     capturesSection
                     
@@ -150,18 +172,38 @@ struct OrderDetailScene: View {
         }
         .alert("Send to Verification?", isPresented: $isSendConfirmationPresented) {
             Button("Cancel", role: .cancel) {}
-            Button("Send") { sendToVerification() }
+            Button("Send") { requestStageChange(.verification) }
         } message: {
             Text("""
                 This compound will appear in the Verification queue. \
                 You won't capture any more images for it from here. 
             """)
         }
+        .alert(
+            "Unexpected Component",
+            isPresented: Binding(
+                get: { pendingStageChange != nil },
+                set: { if !$0 { pendingStageChange = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) { pendingStageChange = nil }
+            Button("Acknowledge") {
+                if let destination = pendingStageChange?.destination {
+                    performStageChange(destination)
+                }
+                pendingStageChange = nil
+            }
+        } message: {
+            Text(unexpectedComponentWarningText)
+        }
         .sheet(isPresented: $isRemediationDetailPresented) {
             remediationDetailSheet
         }
         .sheet(item: $selectedCapture, content: captureViewerSheet)
         .sheet(item: $lotOverrideContext, content: lotOverrideSheet)
+        .sheet(isPresented: $isBarcodeScannerPresented) {
+            barcodeScannerSheet
+        }
         .onAppear {
             acquireLockIfPossible()
             guard canEditOrder else { return }
@@ -255,6 +297,15 @@ struct OrderDetailScene: View {
 
                 Spacer()
 
+                Button {
+                    isBarcodeScannerPresented = true
+                    barcodeInputFocused = false
+                } label: {
+                    Label("Scan", systemImage: "barcode.viewfinder")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+
                 Button("Input Manually") {
                     isManualBarcodeInputVisible = true
                     barcodeInputFocused = true
@@ -277,6 +328,40 @@ struct OrderDetailScene: View {
         }
     }
 
+    private var barcodeScannerSheet: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                BarcodeScanner { barcode in
+                    processBarcode(barcode)
+                    isBarcodeScannerPresented = false
+                    barcodeInputFocused = true
+                }
+
+                Text("Accepted scans are added to the matching component. Unmatched scans are recorded as unexpected components.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .background(Color.rxGroupedBackground.ignoresSafeArea())
+            .navigationTitle("Scan Barcode")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        isBarcodeScannerPresented = false
+                        barcodeInputFocused = true
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
     @ViewBuilder
     private func captureViewerSheet(for capture: CompoundCapture) -> some View {
         CaptureViewerSheet(
@@ -286,7 +371,11 @@ struct OrderDetailScene: View {
             onDelete: { deleteCapture(capture) },
             currentUser: currentUser,
             onAddPreparerPin: addPreparerPinHandler(for: capture),
-            onRemovePreparerPin: removePreparerPinHandler(for: capture)
+            onRemovePreparerPin: removePreparerPinHandler(for: capture),
+            onStoreAnalysis: { analysis in
+                store.storeAnalysis(analysis, orderID: order.id, captureID: capture.id)
+            },
+            onApplyDetectedProduct: applyDetectedProduct
         )
     }
 
@@ -376,13 +465,65 @@ struct OrderDetailScene: View {
         }
     }
 
+    @MainActor
+    private func applyDetectedProduct(_ product: CaptureAnalysis.DetectedProduct) {
+        guard canEditOrder, let currentUser else { return }
+
+        let barcode = product.sourceBarcodePayload
+        let parsed = barcode.map(GS1BarcodeParser.parse)
+        let component = component(matching: product, parsed: parsed)
+        guard let component else {
+            if let barcode {
+                store.addUnexpectedComponent(orderID: order.id, barcodeValue: barcode, addedBy: currentUser)
+            }
+            return
+        }
+
+        addLot(
+            component: component,
+            lot: CompoundUtilizedLot(
+                barcodeValue: barcode,
+                lot: product.detectedLot ?? parsed?.detectedLot ?? "",
+                expiration: product.detectedExpiration ?? parsed?.detectedExpiration,
+                mfg: parsed?.detectedManufacturer,
+                strengthQuantity: defaultScannedQuantity(for: component)
+            )
+        )
+        selectedCapture = nil
+    }
+
+    private func component(
+        matching product: CaptureAnalysis.DetectedProduct,
+        parsed: GS1BarcodeParseResult?
+    ) -> CompoundComponent? {
+        order.components.first { component in
+            if let barcode = product.sourceBarcodePayload, component.product.allowsBarcode(barcode) {
+                return true
+            }
+            if let ndc = product.detectedNDC, component.product.allowsBarcode(ndc) {
+                return true
+            }
+            if let ndc = parsed?.detectedNDC, component.product.allowsBarcode(ndc) {
+                return true
+            }
+            return false
+        }
+    }
+
     private func processBarcodeInput() {
         let barcode = scannerBarcodeInput.trimmingCharacters(in: .whitespacesAndNewlines)
         scannerBarcodeInput = ""
-        guard !barcode.isEmpty, canEditOrder else { return }
+        processBarcode(barcode)
+        barcodeInputFocused = true
+    }
 
-        guard let component = component(matchingBarcode: barcode) else {
-            barcodeInputFocused = true
+    private func processBarcode(_ barcode: String) {
+        let barcode = barcode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !barcode.isEmpty, canEditOrder, let currentUser else { return }
+
+        let parsed = GS1BarcodeParser.parse(barcode)
+        guard let component = component(matchingBarcode: barcode, parsed: parsed) else {
+            store.addUnexpectedComponent(orderID: order.id, barcodeValue: barcode, addedBy: currentUser)
             return
         }
 
@@ -391,17 +532,18 @@ struct OrderDetailScene: View {
             component: component,
             lot: CompoundUtilizedLot(
                 barcodeValue: barcode,
-                lot: "",
-                expiration: nil,
+                lot: parsed.detectedLot ?? "",
+                expiration: parsed.detectedExpiration,
+                mfg: parsed.detectedManufacturer,
                 strengthQuantity: quantity
             )
         )
-        barcodeInputFocused = true
     }
 
-    private func component(matchingBarcode barcode: String) -> CompoundComponent? {
+    private func component(matchingBarcode barcode: String, parsed: GS1BarcodeParseResult) -> CompoundComponent? {
         order.components.first { component in
             component.product.allowsBarcode(barcode)
+                || parsed.detectedNDC.map(component.product.allowsBarcode) == true
         }
     }
 
@@ -415,9 +557,44 @@ struct OrderDetailScene: View {
         store.removeLot(orderID: order.id, componentID: component.id, lotID: lot.id, removedBy: currentUser)
     }
 
+    private func removeUnexpectedComponent(_ component: CompoundComponent) {
+        guard let currentUser, canEditOrder else { return }
+        store.removeUnexpectedComponent(orderID: order.id, componentID: component.id, removedBy: currentUser)
+    }
+
     private func selectStep(_ index: Int) {
-        guard let currentUser, canEditOrder, order.recipeSteps.indices.contains(index) else { return }
-        store.setCurrentStep(orderID: order.id, stepIndex: index, changedBy: currentUser)
+        guard canEditOrder, order.recipeSteps.indices.contains(index) else { return }
+        requestStageChange(.step(index))
+    }
+
+    private func requestStageChange(_ destination: StageDestination) {
+        guard canEditOrder else { return }
+        if order.hasUnexpectedComponents {
+            pendingStageChange = PendingStageChange(destination: destination)
+        } else {
+            performStageChange(destination)
+        }
+    }
+
+    private func performStageChange(_ destination: StageDestination) {
+        guard let currentUser, canEditOrder else { return }
+        switch destination {
+        case .previousStep:
+            store.previousStep(orderID: order.id, changedBy: currentUser)
+        case .nextStep:
+            store.advanceStep(orderID: order.id, changedBy: currentUser)
+        case .step(let index):
+            guard order.recipeSteps.indices.contains(index) else { return }
+            store.setCurrentStep(orderID: order.id, stepIndex: index, changedBy: currentUser)
+        case .verification:
+            store.markReadyForVerification(orderID: order.id, by: currentUser)
+            dismiss()
+        }
+    }
+
+    private var unexpectedComponentWarningText: String {
+        let names = order.unexpectedComponents.map(\.product.name).joined(separator: ", ")
+        return "This order includes unexpected component(s): \(names). Acknowledge that these products are actually being used before changing stages."
     }
 
     private func presentSendConfirmation() {
@@ -426,9 +603,7 @@ struct OrderDetailScene: View {
     }
 
     private func sendToVerification() {
-        guard let currentUser, canEditOrder else { return }
-        store.markReadyForVerification(orderID: order.id, by: currentUser)
-        dismiss()
+        requestStageChange(.verification)
     }
 
     private func resubmitAfterRemediation() {
